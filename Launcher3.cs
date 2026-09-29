@@ -151,22 +151,41 @@ namespace DshLauncher
             return list;
         }
 
+        /// <summary>
+        /// 把可能是相对的路径规范成绝对路径。相对路径的基准取 exe 所在目录，而不是
+        /// 当前目录：DSH_HOME / DSH_ROOT 若被写成相对路径，按当前目录解析会随启动
+        /// 方式漂移；而 WebView2 的 userDataFolder 拿到相对路径时会按它自己的安装
+        /// 目录去解析 —— 表现出来就是 "C:\Program Files\home\window-data" 无法创建。
+        /// </summary>
+        public static string Absolute(string p)
+        {
+            if (string.IsNullOrEmpty(p)) return p;
+            try
+            {
+                if (Path.IsPathRooted(p)) return Path.GetFullPath(p);
+                string b = AppDir;
+                if (string.IsNullOrEmpty(b)) b = Environment.CurrentDirectory;
+                return Path.GetFullPath(Path.Combine(b, p));
+            }
+            catch { return p; }
+        }
+
         /// <summary>解析 DSH 安装位置；结果写入 Root / Home / Found / Note，任何时候调用都安全。</summary>
         public static bool Resolve()
         {
             foreach (string cand in Candidates())
             {
                 if (!IsValidRoot(cand)) continue;
-                Root = cand;
+                Root = Absolute(cand);
                 Found = true;
-                Home = ResolveHome(cand);
-                Note = "已找到 DSH：" + cand;
+                Home = Absolute(ResolveHome(Root));
+                Note = "已找到 DSH：" + Root;
                 return true;
             }
 
             Root = null;
             Found = false;
-            Home = ResolveHome(null);
+            Home = Absolute(ResolveHome(null));
             Note = "未找到 DSH 安装（需要同时存在 node\\node.exe 与 dsh 主程序）";
             return false;
         }
@@ -720,14 +739,24 @@ namespace DshLauncher
 
         private void Log(string msg)
         {
+            // 面板可能已经关掉了，而日志定时器与 DSH 退出回调仍在往里写。
+            // 此时窗口句柄已销毁，InvokeRequired 会返回 false，于是直接落到 _log 上
+            // 抛 ObjectDisposedException（无法访问已释放的对象 TextBox）。
+            if (_log == null || _log.IsDisposed) return;
+
             if (this.InvokeRequired)
             {
-                this.BeginInvoke(new Action<string>(Log), new object[] { msg });
+                try { this.BeginInvoke(new Action<string>(Log), new object[] { msg }); } catch { }
                 return;
             }
-            _log.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + msg + Environment.NewLine);
-            _log.SelectionStart = _log.TextLength;
-            _log.ScrollToCaret();
+            if (_log.IsDisposed) return;
+            try
+            {
+                _log.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + msg + Environment.NewLine);
+                _log.SelectionStart = _log.TextLength;
+                _log.ScrollToCaret();
+            }
+            catch { }
         }
 
         private static bool IsListening()
@@ -1374,6 +1403,28 @@ namespace DshLauncher
         {
             try
             {
+                // token 只存在 DSH 自己的进程内存里，唯一出口是启动时打印的那一行 stdout。
+                // 如果这次运行的 DSH 不是本启动器拉起的，就没有日志可解析 → 打开裸 URL → 401
+                // → 运行窗口停在"连不上 DSH"。而认证后的 cookie 是长期有效的：只要成功带
+                // token 访问过一次，以后裸 URL 也能用。所以这里给出"让启动器接管一次"的出路。
+                string resolved = DshPageUrl.Resolve(Cfg.Url);
+                bool hasToken = resolved.IndexOf("token=", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                if (IsListening() && !hasToken)
+                {
+                    DialogResult r = MessageBox.Show(this,
+                        "DSH 正在运行，但启动器拿不到它的访问凭据（token）。" + Environment.NewLine + Environment.NewLine
+                        + "token 只在 DSH 启动时打印一次，而这次运行的 DSH 不是本启动器拉起的，" + Environment.NewLine
+                        + "所以打不开带凭据的界面（窗口会停在“连不上 DSH”）。" + Environment.NewLine + Environment.NewLine
+                        + "· 是 —— 让启动器重启一次 DSH。会中断当前 DSH 会话，但成功打开一次之后，" + Environment.NewLine
+                        + "       凭据会以 cookie 形式长期保存在窗口数据里，以后就不必再这样。" + Environment.NewLine
+                        + "· 否 —— 照常打开窗口（可能停在“连不上 DSH”页面）。",
+                        "DSH 启动器", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                        MessageBoxDefaultButton.Button1);
+
+                    if (r == DialogResult.Yes) { DoRestart(); return; }
+                }
+
                 PageForm.ShowPage(Cfg.Url);
                 Log("已在 DSH 窗口中打开界面");
             }
@@ -1446,10 +1497,61 @@ namespace DshLauncher
             if (whereOnly) { DshLocator.DumpToConsole(); return; }
             // --install <目录>：无界面安装，日志写 exe 旁的 launcher-install.log
             if (!string.IsNullOrEmpty(installTo)) { RunHeadlessInstall(installTo); return; }
+            // ---- 单实例保护 ----
+            // 面板窗口与运行窗口共用同一个 WebView2 数据目录，而该目录是独占的：
+            // 第二个实例初始化 WebView2 必然失败，报 HRESULT 0x800700AA
+            // (ERROR_BUSY，"请求的资源在使用中")。所以在这里拦住它，并把已经在跑的
+            // 那个窗口带到前台 —— 使用者多半只是没看到窗口又点了一次。
+            bool createdNew;
+            _singleInstance = new Mutex(true, @"Local\DSHLauncher.SingleInstance", out createdNew);
+            if (!createdNew)
+            {
+                if (!ActivateExisting())
+                {
+                    MessageBox.Show(
+                        "DSH 启动器已经在运行了。" + Environment.NewLine + Environment.NewLine
+                        + "如果看不到它的窗口，请检查任务栏，或先把旧实例关掉再启动。",
+                        "DSH 启动器", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                return;
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (pageOnly) { Application.Run(new PageForm(DshPageUrl.Resolve(Cfg.Url))); return; }
             Application.Run(new DshContext());
+        }
+
+        /// <summary>进程级单实例锁，持有到进程结束；用来避免两个实例抢 WebView2 数据目录。</summary>
+        private static Mutex _singleInstance;
+
+        private const int SW_RESTORE = 9;
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        /// <summary>把已经在运行的那个启动器窗口激活到前台；找不到可见窗口时返回 false。</summary>
+        private static bool ActivateExisting()
+        {
+            try
+            {
+                int me = Process.GetCurrentProcess().Id;
+                string name = Process.GetCurrentProcess().ProcessName;
+                foreach (Process p in Process.GetProcessesByName(name))
+                {
+                    if (p.Id == me) continue;
+                    IntPtr h = p.MainWindowHandle;
+                    if (h == IntPtr.Zero) continue;
+                    ShowWindow(h, SW_RESTORE);
+                    SetForegroundWindow(h);
+                    return true;
+                }
+            }
+            catch { }
+            return false;
         }
 
         [DllImport("user32.dll")]
@@ -1956,9 +2058,28 @@ namespace DshLauncher
 
         private static string DataDir()
         {
+            // WebView2 的 userDataFolder 必须是绝对路径：给相对路径它会按自己的安装
+            // 目录去解析（曾表现为 "C:\Program Files\home\window-data" 无法创建）。
             string d = Path.Combine(Cfg.Home, "window-data");
-            try { Directory.CreateDirectory(d); } catch { }
-            return d;
+            try { d = Path.GetFullPath(d); } catch { }
+
+            try
+            {
+                Directory.CreateDirectory(d);
+                return d;
+            }
+            catch
+            {
+                // 实在建不出来（权限、路径非法）就退到临时目录，别让运行窗口整个起不来。
+                // 注意这里不能调 Trace()，它会反过来调 DataDir() 造成递归。
+                try
+                {
+                    string alt = Path.Combine(Path.GetTempPath(), "DSH-Launcher-WebView2");
+                    Directory.CreateDirectory(alt);
+                    return alt;
+                }
+                catch { return d; }
+            }
         }
 
         private static void Trace(string msg)
@@ -2004,20 +2125,53 @@ namespace DshLauncher
             catch (Exception ex)
             {
                 Trace("初始化失败: " + ex.Message);
-                MessageBox.Show("页面窗口初始化失败：" + Environment.NewLine + ex.Message, "DSH",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+                // 0x800700AA = ERROR_BUSY：WebView2 的数据目录被另一个实例占着。
+                // 有了单实例保护之后还走到这里，通常意味着上次异常退出留下了
+                // msedgewebview2 残留进程，所以提示必须给出可操作的步骤。
+                bool busy = (ex.Message.IndexOf("0x800700AA", StringComparison.OrdinalIgnoreCase) >= 0)
+                         || (ex.Message.IndexOf("在使用中", StringComparison.Ordinal) >= 0);
+
+                string text;
+                if (busy)
+                {
+                    text = "页面窗口初始化失败：数据目录被占用。" + Environment.NewLine + Environment.NewLine
+                         + "数据目录：" + Environment.NewLine + DataDir() + Environment.NewLine + Environment.NewLine
+                         + "常见原因与处理：" + Environment.NewLine
+                         + "· 已经有一个「DSH 启动器」在运行 —— 先关掉它（看看任务栏）" + Environment.NewLine
+                         + "· 上次异常退出留下了 WebView2 后台进程 —— 打开任务管理器，" + Environment.NewLine
+                         + "  结束所有 msedgewebview2.exe 再重试";
+                }
+                else
+                {
+                    text = "页面窗口初始化失败：" + Environment.NewLine + ex.Message;
+                }
+
+                MessageBox.Show(text, "DSH", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Close();
             }
         }
 
         private void ShowOffline(string reason)
         {
+            // WebView2 对 401 只报一个笼统的 Unknown，所以按"地址里有没有 token"
+            // 补一句更有用的解释 —— 多半就是凭据没拿到。
+            bool noToken = _url.IndexOf("token=", StringComparison.OrdinalIgnoreCase) < 0;
+            string hint = noToken
+                ? "<div style=\"color:#f0b46a;font-size:12px;margin-top:12px;line-height:1.9\">"
+                  + "这个地址里没有访问凭据（token）。<br>"
+                  + "token 只在 DSH 启动时打印一次，如果 DSH 不是由本启动器拉起的就拿不到。<br>"
+                  + "点启动器面板上的「重启 DSH」让启动器接管一次即可 —— 成功打开一次之后，<br>"
+                  + "凭据会以 cookie 形式长期保存，以后就不必再重启了。</div>"
+                : "";
+
             string html =
                 "<!doctype html><meta charset=\"utf-8\"><body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0b1220;color:#cbd5e1;font:14px 'Microsoft YaHei UI',sans-serif\">"
                 + "<div style=\"text-align:center;line-height:2\">"
                 + "<div style=\"font-size:19px;color:#e2e8f0\">连不上 DSH</div>"
                 + "<div style=\"color:#7d8ca3\">地址 " + _url + "</div>"
                 + "<div style=\"color:#64748b;font-size:12px\">" + reason + "</div>"
+                + hint
                 + "<div style=\"margin-top:16px\"><a href=\"" + _url + "\" style=\"color:#60a5fa;text-decoration:none;border:1px solid #334155;padding:8px 20px;border-radius:8px\">重试</a></div>"
                 + "</div></body>";
             _web.CoreWebView2.NavigateToString(html);

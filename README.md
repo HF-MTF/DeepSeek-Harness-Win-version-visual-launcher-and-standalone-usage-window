@@ -2,7 +2,7 @@
 
 Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 启动器：**一块面板管启停与日志，一个内嵌窗口看界面 —— 不再往浏览器里塞标签页。**
 
-![启动器面板](docs/bin.png)
+![启动器面板](docs/panel.png)
 ![运行窗口](docs/window.png)
 
 ---
@@ -195,6 +195,10 @@ launcher-src/
 
 - [Microsoft.Web.WebView2](https://www.nuget.org/packages/Microsoft.Web.WebView2) 1.0.4258.31（NuGet 包中的 `lib/net462` 与 `runtimes/win-x64/native`），版权归 Microsoft，遵循其许可条款
 - DeepSeek Harness 由 [deepseek-ai](https://github.com/deepseek-ai/deepseek-harness) 开发，本项目只是它的 Windows 外壳
+
+## 更新记录
+
+见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## License
 
