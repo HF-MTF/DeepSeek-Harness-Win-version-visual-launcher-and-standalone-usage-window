@@ -103,7 +103,16 @@ DSH 安装位置
   · 标题栏双击由自绘逻辑处理（避免走系统最大化）；拖动则发
     WM_NCLBUTTONDOWN + HTCAPTION 交给系统，保留拖到屏幕边缘分屏的行为。
   · 面板窗口与页面窗口用自定义 ApplicationContext 管理，各自独立关闭，
-    两个都关掉才退出进程。
+    两个都关掉才退出进程。判断"窗口还在不在"必须用 LauncherForm.IsGone，
+    不能用 Form.IsDisposed —— FormClosed 是在 Dispose 之前触发的，那一刻
+    IsDisposed 仍是 false，用它判断会让 ExitThread() 一次都不被调用，进程
+    变成一个没有窗口却还占着单实例锁的僵尸（任务栏里什么都没有、再双击只
+    提示"已经在运行"，从此打不开）。另有一道不依赖任何事件的巡检兜底，
+    以及 3 秒强退看门狗。
+  · 未处理异常一律写 launcher-error.log，绝不弹 WinForms 的异常对话框 ——
+    那个框带嵌套消息循环，会把 ExitThread 投递的 WM_QUIT 吃掉，外层循环
+    就永远退不出来。定时器也要在 Dispose(bool) 里停掉并释放，否则会在窗体
+    释放后继续 Tick 去碰已释放的控件。
   · DPI：进程声明 PerMonitorV2，窗口尺寸按显示器缩放换算，否则 150% 缩放下会发虚。
   · 面板高度：加了第三行按钮后 DH 560→630、LOG_Y 394→464，这几处尺寸是联动的，
     改一个要一起看（BTN_ROW = BTN_H + 14 已抽出常量）。

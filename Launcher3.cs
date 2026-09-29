@@ -417,7 +417,55 @@ namespace DshLauncher
         }
     }
 
-    class MainForm : Form
+    /// <summary>
+    /// 未处理异常的统一出口：只落日志，永不弹窗。
+    /// 弹窗（WinForms 默认的未处理异常对话框）自带嵌套消息循环，会把 ExitThread 投递的
+    /// WM_QUIT 吃掉，外层消息循环就再也退不出来，进程变成一个没有窗口、还占着单实例锁的僵尸。
+    /// 放在独立静态类里，避免和 ApplicationContext.MainForm 属性重名。
+    /// </summary>
+    static class Crash
+    {
+        private static readonly object _lock = new object();
+
+        public static void Log(Exception ex)
+        {
+            try
+            {
+                string path = Path.Combine(DshLocator.AppDir, "launcher-error.log");
+                lock (_lock)
+                {
+                    File.AppendAllText(path,
+                        "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] "
+                        + (ex == null ? "(无异常对象)" : ex.ToString()) + Environment.NewLine,
+                        Encoding.UTF8);
+                }
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// 启动器里所有窗体的基类，只多一个“真的关掉了”的标记。
+    /// 判断窗口还在不在，绝不能用 <c>IsDisposed</c>：窗体关闭时 FormClosed 事件是在
+    /// Dispose 之前触发的，那一刻 IsDisposed 还是 false。用它做判断就会得出“窗口还在”
+    /// 的结论，于是 ApplicationContext 永远不调 ExitThread()，消息循环一直空转 ——
+    /// 现象就是“窗口关掉了、任务栏什么都没有、进程还在、单实例锁不放、再也打不开”。
+    /// </summary>
+    class LauncherForm : Form
+    {
+        private bool _gone;
+
+        /// <summary>窗体已经关闭或已释放：它的窗口不会再回来。</summary>
+        public bool IsGone { get { return _gone || IsDisposed; } }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            _gone = true;          // 必须在 base 之前：FormClosed 的处理器里马上就会读它
+            base.OnFormClosed(e);
+        }
+    }
+
+    class MainForm : LauncherForm
     {
         // ---- 设计稿尺寸（96 DPI 基准）----
         private const int DW = 448;
@@ -451,6 +499,8 @@ namespace DshLauncher
         private Point _dragOffset;
         private bool _firstShow = true;
         private bool _closeAnimDone;
+        /// <summary>关闭流程（问一句 + 淡出动画）进行中；用来忽略重复的关闭请求。</summary>
+        private bool _closeAnimBusy;
         /// <summary>安装 / 部署进行中：期间禁用相关按钮，避免并发操作。</summary>
         private bool _installBusy;
 
@@ -532,19 +582,20 @@ namespace DshLauncher
             RefreshState();
             Log("DSH 启动器已就绪");
 
+            // 每个 Tick 都先确认窗体还活着：窗口关闭后定时器仍可能被派发一次。
             _stateTimer = new System.Windows.Forms.Timer();
             _stateTimer.Interval = 1200;
-            _stateTimer.Tick += delegate { RefreshState(); };
+            _stateTimer.Tick += delegate { if (IsDisposed || Disposing) return; RefreshState(); };
             _stateTimer.Start();
 
             _balanceTimer = new System.Windows.Forms.Timer();
             _balanceTimer.Interval = 60000;
-            _balanceTimer.Tick += delegate { RefreshBalance(); };
+            _balanceTimer.Tick += delegate { if (IsDisposed || Disposing) return; RefreshBalance(); };
             _balanceTimer.Start();
 
             _logTimer = new System.Windows.Forms.Timer();
             _logTimer.Interval = 500;
-            _logTimer.Tick += delegate { PumpDshLog(); };
+            _logTimer.Tick += delegate { if (IsDisposed || Disposing) return; PumpDshLog(); };
             _logTimer.Start();
 
             RefreshBalance();
@@ -809,6 +860,7 @@ namespace DshLauncher
 
         private void ApplyRunning(bool running)
         {
+            if (IsDisposed || Disposing) return;   // 窗口已释放：碰控件就是 ObjectDisposedException
             _bStart.Enabled = !running && !_installBusy;
             _bRestart.Enabled = running && !_installBusy;
             _bOpen.Enabled = running && !_installBusy;
@@ -819,6 +871,7 @@ namespace DshLauncher
 
         private void RefreshState()
         {
+            if (IsDisposed || Disposing) return;   // 同上：状态定时器可能在关闭之后还被派发
             bool running = IsListening();
             bool changed = (running != _lastRunning);
             if (changed)
@@ -907,6 +960,7 @@ namespace DshLauncher
                 {
                     this.BeginInvoke(new Action(delegate
                     {
+                        if (IsDisposed || Disposing) return;
                         _balanceText = v != null ? v : "";
                         if (!_balanceLogged)
                         {
@@ -960,6 +1014,7 @@ namespace DshLauncher
                     {
                         this.BeginInvoke(new Action(delegate
                         {
+                            if (IsDisposed || Disposing) return;
                             PumpDshLog();
                             Log("DSH 进程已退出");
                             _proc = null;
@@ -1539,20 +1594,47 @@ namespace DshLauncher
             Anim.Run(this, Bounds, target, 0, 1, 190, null);
         }
 
+        /// <summary>
+        /// 停掉并释放三个定时器。它们是“组件”，不会跟着窗体一起 Dispose：一旦在窗体
+        /// 释放后继续 Tick，就会去碰已经释放的按钮和画布，抛 ObjectDisposedException，
+        /// 而那个异常框会用嵌套消息循环吃掉 ExitThread 的 WM_QUIT，把进程卡成僵尸。
+        /// </summary>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                StopTimer(_stateTimer); _stateTimer = null;
+                StopTimer(_balanceTimer); _balanceTimer = null;
+                StopTimer(_logTimer); _logTimer = null;
+            }
+            base.Dispose(disposing);
+        }
+
+        private static void StopTimer(System.Windows.Forms.Timer t)
+        {
+            if (t == null) return;
+            try { t.Stop(); t.Dispose(); } catch { }
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            // 已经释放了（关闭动画与别的路径可能同时走到这里）：直接放行，不再做动画。
+            if (IsDisposed || Disposing) { base.OnFormClosing(e); return; }
+
             if (!_closeAnimDone)
             {
+                e.Cancel = true;              // 先拦下这次关闭，问完、放完动画再真正关
+                if (_closeAnimBusy) return;   // 关闭流程进行中：忽略重复的 X（双击标题栏会重入）
+                _closeAnimBusy = true;
                 if (IsListening())
                 {
                     DialogResult r = MessageBox.Show(
                         "DSH 还在运行。\n\n· 是  —— 停掉 DSH 再关闭\n· 否  —— 只关这个窗口，DSH 继续跑\n· 取消 —— 什么都不做",
                         "DSH 启动器", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question,
                         MessageBoxDefaultButton.Button1);
-                    if (r == DialogResult.Cancel) { e.Cancel = true; return; }
+                    if (r == DialogResult.Cancel) { _closeAnimBusy = false; return; }
                     if (r == DialogResult.Yes) DoStop();
                 }
-                e.Cancel = true;
                 _closeAnimDone = true;
                 Anim.Run(this, Bounds, Anim.Shrink(Bounds, 0.96), 1, 0, 150, delegate { Close(); });
                 return;
@@ -1595,6 +1677,8 @@ namespace DshLauncher
             // 第二个实例初始化 WebView2 必然失败，报 HRESULT 0x800700AA
             // (ERROR_BUSY，"请求的资源在使用中")。所以在这里拦住它，并把已经在跑的
             // 那个窗口带到前台 —— 使用者多半只是没看到窗口又点了一次。
+            // 若旧实例连窗口都没有了（消息循环卡死），ActivateExisting 会问一句然后
+            // 把它结束掉重新拉起，避免使用者被这个锁永久挡在门外。
             bool createdNew;
             _singleInstance = new Mutex(true, @"Local\DSHLauncher.SingleInstance", out createdNew);
             if (!createdNew)
@@ -1603,7 +1687,8 @@ namespace DshLauncher
                 {
                     MessageBox.Show(
                         "DSH 启动器已经在运行了。" + Environment.NewLine + Environment.NewLine
-                        + "如果看不到它的窗口，请检查任务栏，或先把旧实例关掉再启动。",
+                        + "请检查任务栏（它可能被最小化或压在别的窗口后面）。" + Environment.NewLine
+                        + "如果确实找不到它的窗口，可在任务管理器里结束“DSH启动器”再启动。",
                         "DSH 启动器", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 return;
@@ -1611,6 +1696,15 @@ namespace DshLauncher
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+
+            // 绝不能让 WinForms 弹“未处理异常”对话框：那个框自带嵌套消息循环，会把
+            // ExitThread() 投递的 WM_QUIT 吃掉，外层消息循环于是永远退不出来 —— 表现就是
+            // “窗口关掉了、任务栏什么都没有、进程还在占着单实例锁、再点启动器只提示已经
+            // 在运行”。这里改成只落日志，让消息循环能正常收到 WM_QUIT。
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += delegate(object s, ThreadExceptionEventArgs te) { Crash.Log(te.Exception); };
+            AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs ue) { Crash.Log(ue.ExceptionObject as Exception); };
+
             if (pageOnly) { Application.Run(new PageForm(DshPageUrl.Resolve(Cfg.Url))); return; }
             Application.Run(new DshContext());
         }
@@ -1619,6 +1713,7 @@ namespace DshLauncher
         private static Mutex _singleInstance;
 
         private const int SW_RESTORE = 9;
+        private const int SW_SHOW = 5;
 
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -1626,9 +1721,92 @@ namespace DshLauncher
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
-        /// <summary>把已经在运行的那个启动器窗口激活到前台；找不到可见窗口时返回 false。</summary>
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassNameW(IntPtr hWnd, StringBuilder text, int count);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        /// <summary>
+        /// 找某进程的顶层窗口。不能用 Process.MainWindowHandle：它只认“可见”的窗口，
+        /// 窗口被隐藏（或已停在关闭动画里）时返回 0，于是明明窗口还在却被当成没有。
+        /// 这里只认 WinForms 的顶层窗口，跳过 .NET-BroadcastEventWindow / GDI+ Hook /
+        /// IME 这些框架自带的隐藏窗口。
+        /// </summary>
+        private static IntPtr FindMainWindow(int pid)
+        {
+            IntPtr found = IntPtr.Zero;
+            try
+            {
+                EnumWindows(delegate(IntPtr h, IntPtr l)
+                {
+                    uint owner;
+                    GetWindowThreadProcessId(h, out owner);
+                    if ((int)owner != pid) return true;
+                    StringBuilder cls = new StringBuilder(256);
+                    GetClassNameW(h, cls, 256);
+                    if (cls.ToString().IndexOf("WindowsForms", StringComparison.OrdinalIgnoreCase) < 0) return true;
+                    if (IsWindowVisible(h)) { found = h; return false; }   // 可见的优先，找到就收工
+                    if (found == IntPtr.Zero) found = h;                   // 否则先记下隐藏的那个
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch { }
+            return found;
+        }
+
+        /// <summary>把已经在运行的那个启动器窗口激活到前台。</summary>
+        /// <returns>
+        /// true 表示“已经处理过了”（窗口已激活，或已经问过使用者并做出了处理），
+        /// 调用方不必再弹第二个提示框；false 表示压根没找到那个实例。
+        /// </returns>
         private static bool ActivateExisting()
         {
+            try
+            {
+                int me = Process.GetCurrentProcess().Id;
+                string name = Process.GetCurrentProcess().ProcessName;
+                bool stale = false;
+                foreach (Process p in Process.GetProcessesByName(name))
+                {
+                    if (p.Id == me) continue;
+                    IntPtr h = p.MainWindowHandle;
+                    if (h == IntPtr.Zero) h = FindMainWindow(p.Id);
+                    if (h == IntPtr.Zero) { stale = true; continue; }   // 进程在、窗口没了
+                    ShowWindow(h, SW_RESTORE);
+                    ShowWindow(h, SW_SHOW);
+                    SetForegroundWindow(h);
+                    return true;
+                }
+                if (stale) return ReviveStale();
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>
+        /// 旧实例还在，但已经没有任何窗口（消息循环卡住、或 WM_QUIT 被某个模态框吞掉）。
+        /// 这时单实例锁会把使用者永久挡在门外，所以问一句就把它结束掉再重新拉起。
+        /// 只结束启动器自己 —— DSH 是独立进程，不会被波及。
+        /// </summary>
+        private static bool ReviveStale()
+        {
+            DialogResult r = MessageBox.Show(
+                "已经有一个 DSH 启动器在运行，但它的窗口不见了（进程卡住了）。" + Environment.NewLine + Environment.NewLine
+                + "· 是 —— 结束那个卡住的启动器，然后重新打开窗口" + Environment.NewLine
+                + "        （只结束启动器本身，不会停掉正在运行的 DSH）" + Environment.NewLine
+                + "· 否 —— 什么都不做",
+                "DSH 启动器", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button1);
+            if (r != DialogResult.Yes) return true;   // 选择不动它：也算处理过了，别再弹一个框
+
             try
             {
                 int me = Process.GetCurrentProcess().Id;
@@ -1636,15 +1814,13 @@ namespace DshLauncher
                 foreach (Process p in Process.GetProcessesByName(name))
                 {
                     if (p.Id == me) continue;
-                    IntPtr h = p.MainWindowHandle;
-                    if (h == IntPtr.Zero) continue;
-                    ShowWindow(h, SW_RESTORE);
-                    SetForegroundWindow(h);
-                    return true;
+                    try { p.Kill(); p.WaitForExit(3000); } catch { }
                 }
             }
             catch { }
-            return false;
+
+            try { Process.Start(Application.ExecutablePath); } catch { }
+            return true;
         }
 
         [DllImport("user32.dll")]
@@ -1683,7 +1859,15 @@ namespace DshLauncher
                 {
                     try { f.Opacity = opFrom + (opTo - opFrom) * e; } catch { }
                 }
-                if (p >= 1.0) { t.Stop(); t.Dispose(); if (done != null) done(); }
+                // done 里通常是 Close()，而窗体可能已经被别的路径释放掉了。异常绝不能从这里
+                // 冒到消息循环：那会弹出模态异常框，把 ExitThread 的 WM_QUIT 吃掉，进程就变成
+                // 一个“没有窗口、任务栏什么都没有、却还占着单实例锁”的僵尸。
+                if (p >= 1.0)
+                {
+                    t.Stop();
+                    t.Dispose();
+                    if (done != null) { try { done(); } catch (Exception ex) { Crash.Log(ex); } }
+                }
             };
             t.Start();
         }
@@ -1694,6 +1878,9 @@ namespace DshLauncher
     {
         public static DshContext Current;
         private readonly MainForm _panel;
+        private static int _exitArmed;
+        private int _goneTicks;
+        private readonly System.Threading.Timer _reaper;
 
         public DshContext()
         {
@@ -1701,13 +1888,73 @@ namespace DshLauncher
             _panel = new MainForm();
             _panel.FormClosed += delegate { Tick(); };
             _panel.Show();
+            // 巡检兜底：完全不依赖 FormClosed 事件。只要“面板没了 + 页面窗口也没了”连续
+            // 两次（约 1 秒）成立，就直接结束进程 —— 消息循环万一因为别的原因退不出来，
+            // 也不会再留下一个没有窗口、却还占着单实例锁的僵尸。
+            _reaper = new System.Threading.Timer(delegate { Reap(); }, null, 1000, 500);
+        }
+
+        /// <summary>
+        /// 还有任何窗口活着吗（面板或页面窗口）。这里必须用 IsGone 而不是 IsDisposed ——
+        /// FormClosed 触发时窗体还没 Dispose，用 IsDisposed 会一直以为窗口还开着。
+        /// </summary>
+        public bool AnyWindowOpen()
+        {
+            return ((_panel != null) && !_panel.IsGone) || PageForm.IsOpen;
         }
 
         public void Tick()
         {
-            bool panelOpen = (_panel != null) && !_panel.IsDisposed;
-            bool pageOpen = PageForm.IsOpen;
-            if (!panelOpen && !pageOpen) ExitThread();
+            if (AnyWindowOpen()) return;
+            StopReaper();
+            try { ExitThread(); } catch (Exception ex) { Crash.Log(ex); }
+            ArmHardExit();
+        }
+
+        private void StopReaper()
+        {
+            try { if (_reaper != null) _reaper.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
+        }
+
+        /// <summary>
+        /// 巡检线程（线程池线程）：确认没有窗口就直接强退。这里不碰消息循环 ——
+        /// ExitThread 只能在 UI 线程上调用，从别的线程调是无效的。
+        /// </summary>
+        private void Reap()
+        {
+            if (AnyWindowOpen()) { _goneTicks = 0; return; }
+            if (++_goneTicks < 2) return;
+            StopReaper();
+            try { Environment.Exit(0); } catch { }
+        }
+
+        /// <summary>
+        /// 兜底硬退出。ExitThread() 只是往线程队列投一个 WM_QUIT，而 WM_QUIT 只会被
+        /// “取出它的那一个”消息循环消费掉：只要当时还有个嵌套消息循环在跑（模态框、
+        /// 异常对话框、拖拽循环），它就会被里层吃掉，外层 Application.Run 永远不返回 ——
+        /// 结果是进程变成“没有窗口、任务栏什么都没有、却还占着单实例锁”的僵尸，使用者
+        /// 再也打不开这个程序。所以这里再补一道：几秒后确认还是没有任何窗口，就直接退出。
+        /// </summary>
+        private static void ArmHardExit()
+        {
+            if (Interlocked.Exchange(ref _exitArmed, 1) != 0) return;
+            Thread t = new Thread(delegate()
+            {
+                for (int i = 0; i < 12; i++)      // 最多守 ~3 秒
+                {
+                    Thread.Sleep(250);
+                    DshContext c = Current;
+                    if (c != null && c.AnyWindowOpen())
+                    {
+                        Interlocked.Exchange(ref _exitArmed, 0);   // 又有窗口了，撤销兜底
+                        return;
+                    }
+                }
+                try { Environment.Exit(0); } catch { }
+            });
+            t.IsBackground = true;
+            t.Name = "DSHLauncher.ExitWatchdog";
+            t.Start();
         }
     }
 
@@ -1782,7 +2029,7 @@ namespace DshLauncher
     }
 
     /// <summary>启动器自带的 DSH 页面窗口（WebView2 + 自绘深色边框），同进程内只开一个。</summary>
-    class PageForm : Form
+    class PageForm : LauncherForm
     {
         private const string WindowCaption = "DSH-HFRin调试版";
         private static PageForm _open;
@@ -1808,12 +2055,13 @@ namespace DshLauncher
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
-        public static bool IsOpen { get { return _open != null && !_open.IsDisposed; } }
+        // 同理用 IsGone 而不是 IsDisposed：FormClosed 里就要读这个值，那时还没 Dispose。
+        public static bool IsOpen { get { return _open != null && !_open.IsGone; } }
 
         public static void ShowPage(string rawUrl)
         {
             string url = DshPageUrl.Resolve(rawUrl);
-            if (_open == null || _open.IsDisposed) _open = new PageForm(url);
+            if (_open == null || _open.IsGone) _open = new PageForm(url);
             if (_open.WindowState == FormWindowState.Minimized) _open.WindowState = FormWindowState.Normal;
             _open.Show();
             _open.Activate();

@@ -2,8 +2,8 @@
 
 Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 启动器：**一块面板管启停与日志，一个内嵌窗口看界面 —— 不再往浏览器里塞标签页。**
 
-![启动器面板](docs/bin.png)
-![运行窗口](docs/1.png)
+![启动器面板](docs/panel.png)
+![运行窗口](docs/window.png)
 
 ---
 
@@ -43,6 +43,9 @@ Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - 关掉面板 → 运行窗口继续开着，进程不退
 - 两个都关掉 → 进程才退出
 - 面板与页面窗口用自定义 `ApplicationContext` 管理生命周期
+- 同一时间只允许一个实例（两个窗口共用同一份 WebView2 数据目录，而它是独占的）：
+  重复双击会把已有窗口叫到前台；万一已有实例连窗口都没有了，会问一句是否结束它再重新
+  打开 —— 只结束启动器本身，不碰正在跑的 DSH
 
 ## 环境要求
 
@@ -184,6 +187,12 @@ launcher-src/
 - **原生动画**：`FormBorderStyle.None` 的窗口没有 `WS_CAPTION`，Windows 不给播过渡动画 —— 保留 `Sizable` 样式再用 `WM_NCCALCSIZE` 抹掉非客户区
 - **最大化留缝**：带边框窗口被系统最大化时窗口矩形比工作区大一圈，底部压任务栏 → 自定义最大化并在 `Resize` 里自动纠正
 - **DPI 发虚**：进程声明 PerMonitorV2，窗口尺寸按显示器缩放换算
+- **「窗口关没关」不能用 `IsDisposed` 判断**：`FormClosed` 是在 `Dispose()` **之前**触发的，
+  那一刻 `IsDisposed` 还是 `false`。用它判断会让 `ApplicationContext` 一直以为窗口还开着、
+  永远不调 `ExitThread()`，进程就变成一个没有窗口却还占着单实例锁的僵尸（外部表现：任务栏
+  里什么都没有、再双击只提示「已经在运行了」，从此进不去）。统一用 `LauncherForm.IsGone`
+- **未处理异常绝不弹模态框**：WinForms 自带的「未处理异常」对话框有嵌套消息循环，会把
+  `ExitThread()` 投递的 `WM_QUIT` 吃掉，外层消息循环永远退不出来。统一写 `launcher-error.log`
 
 ## 已知限制
 
