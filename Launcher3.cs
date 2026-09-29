@@ -1170,6 +1170,8 @@ namespace DshLauncher
                 if (code != 0)
                 {
                     LogAsync("[X] npm 安装失败（退出码 " + code + "），安装中止");
+                    DumpNpmLogTail();
+                    LogAsync("   可依次检查：能不能访问 registry、目标目录是否可写、磁盘剩余空间。");
                     return;
                 }
 
@@ -1294,20 +1296,77 @@ namespace DshLauncher
             }
         }
 
-        /// <summary>在 dsh 目录里跑 npm install；返回退出码。</summary>
+        /// <summary>在 dsh 目录里跑 npm install；返回退出码。失败会自动重试一次。</summary>
         private static int RunNpm(string root, string dshDir)
         {
-            string npm = Path.Combine(root, @"node\npm.cmd");
-            if (!File.Exists(npm)) { LogAsync("[X] 找不到 npm：" + npm); return -1; }
+            if (!File.Exists(Path.Combine(root, @"node\node.exe")) ||
+                !File.Exists(Path.Combine(root, @"node\npm.cmd")))
+            {
+                LogAsync("[X] node 或 npm 缺失，无法安装：" + root);
+                return -1;
+            }
 
-            ProcessStartInfo psi = new ProcessStartInfo("cmd.exe");
-            psi.Arguments = "/s /c \"\"" + npm + "\" install @deepseek-ai/dsh"
-                          + " --registry https://registry.npmmirror.com --no-fund --no-audit\"";
+            // 第二次尝试换官方源并跳过包内构建脚本：koffi / node-pty 这类包的 install
+            // script 依赖本机编译环境，一旦失败就会让整个安装中断，而它们的预编译产物
+            // 本来就在包里，跳过不影响 DSH 运行（已实测）。
+            string[][] attempts = new string[][]
+            {
+                new string[] { "https://registry.npmmirror.com", "" },
+                new string[] { "https://registry.npmjs.org", " --ignore-scripts" }
+            };
+
+            int code = -1;
+            for (int i = 0; i < attempts.Length; i++)
+            {
+                if (i > 0) LogAsync("   重试：改用 " + attempts[i][0] + " 并跳过包内构建脚本");
+                code = RunNpmOnce(root, dshDir, attempts[i][0], attempts[i][1]);
+                if (code == 0) return 0;
+                if (i + 1 < attempts.Length) LogAsync("   该次失败（退出码 " + code + "）");
+            }
+            return code;
+        }
+
+        private static int RunNpmOnce(string root, string dshDir, string registry, string extraArgs)
+        {
+            string nodeExe = Path.Combine(root, @"node\node.exe");
+            string nodeDir = Path.Combine(root, "node");
+            string npmCli = Path.Combine(root, @"node\node_modules\npm\bin\npm-cli.js");
+            string npmCmd = Path.Combine(root, @"node\npm.cmd");
+            string args = "install @deepseek-ai/dsh --registry " + registry
+                        + " --no-fund --no-audit" + extraArgs;
+
+            ProcessStartInfo psi;
+            if (File.Exists(npmCli))
+            {
+                // 直接让 node 跑 npm，绕开 cmd.exe。中文系统的 cmd 默认代码页是 936(GBK)，
+                // 而 npm 输出 UTF-8，两者不一致会把整份日志变成乱码、真实报错全被吃掉；
+                // 顺带也免掉了 cmd 那层引号嵌套。
+                psi = new ProcessStartInfo(nodeExe);
+                psi.Arguments = "\"" + npmCli + "\" " + args;
+            }
+            else
+            {
+                psi = new ProcessStartInfo("cmd.exe");
+                psi.Arguments = "/s /c \"\"" + npmCmd + "\" " + args + "\"";
+            }
             psi.WorkingDirectory = dshDir;
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
+            psi.StandardOutputEncoding = Encoding.UTF8;
+            psi.StandardErrorEncoding = Encoding.UTF8;
+
+            // 包的 install script 里用的是裸 `node`（例如 koffi 的
+            // "cmd.exe /d /s /c node ./cnoke.cjs ..."），必须能通过 PATH 找到它，
+            // 否则脚本报 "'node' 不是内部或外部命令" 并让整个安装失败 ——
+            // 全新机器上 PATH 里通常没有 node，这一步不能省。
+            try
+            {
+                string cur = psi.EnvironmentVariables["PATH"];
+                psi.EnvironmentVariables["PATH"] = nodeDir + ";" + (cur == null ? "" : cur);
+            }
+            catch { }
 
             using (Process p = new Process())
             {
@@ -1320,6 +1379,40 @@ namespace DshLauncher
                 p.WaitForExit();
                 return p.ExitCode;
             }
+        }
+
+        /// <summary>
+        /// npm 失败时把最新那份调试日志的尾部捞进面板 —— npm 的完整报错通常只写在这里，
+        /// 控制台上只留一句 "A complete log of this run can be found in ..."。
+        /// </summary>
+        private static void DumpNpmLogTail()
+        {
+            try
+            {
+                string dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "npm-cache", "_logs");
+                if (!Directory.Exists(dir)) return;
+
+                FileInfo newest = null;
+                foreach (string f in Directory.GetFiles(dir, "*.log"))
+                {
+                    FileInfo fi = new FileInfo(f);
+                    if (newest == null || fi.LastWriteTimeUtc > newest.LastWriteTimeUtc) newest = fi;
+                }
+                if (newest == null) return;
+
+                LogAsync("   —— npm 调试日志尾部 ——");
+                LogAsync("   " + newest.FullName);
+                string[] lines = File.ReadAllLines(newest.FullName, Encoding.UTF8);
+                int start = Math.Max(0, lines.Length - 12);
+                for (int i = start; i < lines.Length; i++)
+                {
+                    string t = lines[i].Trim();
+                    if (t.Length > 0) LogAsync("   | " + t);
+                }
+            }
+            catch { }
         }
 
         // ---- 安装流程的日志出口与完成回调，由调用方注入。
