@@ -19,6 +19,7 @@ Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 ### 面板窗口
 
 - 一键 **启动 / 重启 / 停止** DSH
+- **自动找 DSH**：路径不写死，可识别任意位置的安装；找不到时支持一键安装或手动指定
 - 实时状态：监听地址、PID、账户余额（60 秒自动刷新）
 - **运行日志**：DSH 的 stdout/stderr 实时回显到面板
 - 系统托盘式的精简尺寸，DPI 感知（PerMonitorV2）
@@ -52,6 +53,20 @@ Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 | WebView2 Runtime | Win11 随 Edge 自带；Win10 可能需[单独安装](https://developer.microsoft.com/microsoft-edge/webview2/) |
 | DeepSeek Harness | 已安装的 `@deepseek-ai/dsh`（Node 运行时 + 主程序）|
 
+## 直接运行（不用编译）
+
+不想编译的话，`release\` 里有打包好的 **成品包**（`DSH启动器-成品-*.zip`）：解压到任意目录、双击 exe 就能用，启动器会自己找到 DSH。
+
+`dist\` 里放的就是成品包的内容：
+
+| 文件 | 说明 |
+|---|---|
+| `dist\DSH启动器.exe` | 主程序 |
+| `dist\Microsoft.Web.WebView2.*.dll` | WebView2 托管库（运行必需）|
+| `dist\WebView2Loader.dll` | 原生加载器（运行必需）|
+
+改了源码要重新编译，**双击 `一键编译并部署.bat`** 即可（编译 → 自动检测 DSH 安装位置 → 部署 → 冒烟验证 → 同步 dist）。
+
 ## 快速开始
 
 ### 直接用编译好的
@@ -65,8 +80,14 @@ Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
    WebView2Loader.dll
    ```
 
-2. 打开 `Launcher3.cs` 顶部的 `Cfg` 类，把路径改成你自己的安装位置（默认写的是 `E:\DeepSeekHarness`）
-3. 双击运行
+2. 双击运行 —— **不用改任何源码**，启动器会自己找到 DSH
+
+   没找到时，面板上有两个按钮兜底：
+
+   | 按钮 | 作用 |
+   |---|---|
+   | **一键安装 DSH** | 选一个目录，自动下载 Node 运行时并 `npm install @deepseek-ai/dsh` |
+   | **指定已有目录** | 已经装好但没被检测到？手动选中 DSH 根目录，路径会被记住 |
 
 ### 自己编译
 
@@ -75,23 +96,54 @@ Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-`build.ps1` 会：编译到 `build\` → 替换部署目录的 exe → 起一个实例检查最大化是否贴合工作区并截图留证。
+`build.ps1` 会：编译到 `build\` → **自动检测 DSH 安装位置** → 部署 exe 与三个运行库 → 起一个实例检查最大化是否贴合工作区并截图留证。
 
-## 配置
+可选参数：`-NoDeploy`（只编译）、`-DeployTo <目录>`（指定部署位置）、`-NoSmoke`（跳过冒烟）。
 
-配置集中在 `Launcher3.cs` 顶部：
+## 自动检测 DSH
 
-```csharp
-static class Cfg
-{
-    public const int    Port    = 3080;
-    public const string Home    = @"E:\DeepSeekHarness\home";                 // DSH_HOME
-    public const string NodeExe = @"E:\DeepSeekHarness\node\node.exe";
-    public const string NodeDir = @"E:\DeepSeekHarness\node";
-    public const string DshBin  = @"E:\DeepSeekHarness\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js";
-    public const string Url     = "http://127.0.0.1:3080";
-}
+启动时按优先级探测，**第一个同时具备 `node\node.exe` 与 `dsh\node_modules\@deepseek-ai\dsh\lib\bin.js` 的目录**胜出：
+
+| 顺序 | 来源 |
+|---|---|
+| 1 | `launcher-path.txt`（exe 同目录，手动指定后写入） |
+| 2 | 环境变量 `DSH_ROOT` |
+| 3 | 环境变量 `DSH_HOME` 及其上级目录 |
+| 4 | **exe 自身所在目录，以及向上 4 级** |
+| 5 | 常见位置：`%LOCALAPPDATA%`、`%USERPROFILE%`、`%ProgramFiles%`、`C:`~`G:` 根下的 `DeepSeekHarness` / `DSH` |
+| 6 | 当前工作目录 |
+
+所以 exe 放在 DSH 根目录、或者它的任意子目录里都能认出来。想确认探测过程：
+
+```powershell
+DSH启动器.exe --where
 ```
+
+逐条打印候选目录的判定结果，并落一份 `launcher-where.txt` 留档。
+
+**DSH_HOME** 的确定顺序：环境变量 `DSH_HOME` → `<root>\home` → `%USERPROFILE%\.dsh`。
+**端口**固定 3080，写在 `Cfg.Port`。
+
+## 安装 / 部署 DSH
+
+两种方式，装出来的东西一样（Node 运行时 + `@deepseek-ai/dsh`）：
+
+**图形界面**：面板上点「一键安装 DSH」，选个目录即可。
+
+**命令行**（适合脚本化 / 无人值守）：
+
+```powershell
+DSH启动器.exe --install "D:\DeepSeekHarness"
+```
+
+进度逐行写 `launcher-install.log`（exe 同目录）。流程：
+
+1. 查最新 Node LTS 版本（`npmmirror.com/mirrors/node/index.json`），查不到就用内置的兜底版本
+2. 下载 `node-vX-win-x64.zip`，解压时剥掉公共顶层目录
+3. 用 `node\npm.cmd` 安装 `@deepseek-ai/dsh`（走 `registry.npmmirror.com`）
+4. 建 `home\`，把路径写进 `launcher-path.txt`
+
+目标目录里已有 Node 运行时则跳过第 2 步；整个目录已经是可用安装则直接切换过去，不重复下载。
 
 ## 命令行参数
 
@@ -99,19 +151,27 @@ static class Cfg
 |---|---|
 | 无 | 打开启动器面板 |
 | `--page` | 只打开运行窗口，不显示面板（适合做"直接进界面"的快捷方式）|
+| `--where` | 只报告 DSH 位置的检测结果并退出，不弹任何窗口（同时写 `launcher-where.txt`）|
+| `--install <目录>` | 无界面安装 DSH 到指定目录（下载 Node 运行时 + `npm install @deepseek-ai/dsh`），日志写 `launcher-install.log` |
 
 ## 目录结构
 
 ```
 launcher-src/
-├─ Launcher3.cs              启动器主体（面板 + 运行窗口 + 自绘边框）
-├─ app.manifest              DPI 感知 / 通用控件 v6 / Win10-11 兼容
-├─ app.ico                   程序图标
-├─ logo160.png               标题栏头像（编译为嵌入资源 WhaleIcon）
-├─ whale64.png               备用素材
-├─ build.ps1                 一键编译 + 部署 + 冒烟验证
-├─ lib/                      WebView2 SDK（编译引用，运行时也要）
-└─ docs/                     README 配图
+├─ Launcher3.cs                 启动器主体（面板 + 运行窗口 + 自绘边框 + 定位/安装）
+├─ build.ps1                    编译 + 自动定位 + 部署 + 冒烟 + 同步 dist
+├─ 一键编译并部署.bat           双击即跑 build.ps1（全流程）
+├─ app.manifest                 DPI 感知 / 通用控件 v6 / Win10-11 兼容
+├─ app.ico                      程序图标
+├─ logo160.png                  标题栏头像（编译为嵌入资源 WhaleIcon）
+├─ whale64.png                  备用素材
+├─ README.md                    本文件
+├─ README-源码说明.txt          实现备注与踩坑记录
+├─ lib/                         WebView2 SDK（编译引用，运行时也要）
+├─ docs/                        README 配图
+├─ dist/                        发布成品（exe + 3 个运行库），解压即用
+├─ release/                     打包好的 zip（源码包 / 成品包）
+└─ build/                       编译中间产物，可随时删
 ```
 
 ## 实现要点
@@ -127,7 +187,6 @@ launcher-src/
 
 ## 已知限制
 
-- 路径写死在 `Cfg` 里，换机器要改源码重编（暂未做成配置文件）
 - 仅 Windows（依赖 WinForms + WebView2 + DWM）
 - 运行窗口不支持透明度动画：WebView2 在分层窗口（`Opacity<1`）下渲染异常，所以只有面板用了淡入淡出
 - 余额显示依赖 DSH 的凭据配置（`$DSH_HOME/.credentials.yaml`）

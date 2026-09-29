@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Reflection;
@@ -16,14 +18,244 @@ using Microsoft.Web.WebView2.WinForms;
 
 namespace DshLauncher
 {
+    /// <summary>
+    /// DSH 安装位置解析。按优先级探测：记住的路径 → 环境变量 → 本程序所在目录及上级
+    /// → 常见安装位置 → 当前工作目录；第一个同时具备 node\node.exe 与
+    /// dsh\node_modules\@deepseek-ai\dsh\lib\bin.js 的目录即判定为安装根。
+    /// </summary>
+    static class DshLocator
+    {
+        /// <summary>DSH 根目录；未找到安装时为 null。</summary>
+        public static string Root;
+        /// <summary>DSH_HOME；永不为 null（兜底回退到 %USERPROFILE%\.dsh）。</summary>
+        public static string Home;
+        /// <summary>是否解析到可用的 DSH 安装。</summary>
+        public static bool Found;
+        /// <summary>本次解析的说明文字，供面板提示使用。</summary>
+        public static string Note = "";
+
+        private static string _appDir;
+
+        /// <summary>本程序 exe 所在目录。</summary>
+        public static string AppDir
+        {
+            get
+            {
+                if (_appDir == null)
+                {
+                    try { _appDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location); }
+                    catch { _appDir = Environment.CurrentDirectory; }
+                }
+                return _appDir;
+            }
+        }
+
+        /// <summary>记住用户指定的 DSH 根目录（写在 exe 旁边，便携、不碰注册表）。</summary>
+        public static string ConfigFile { get { return Path.Combine(AppDir, "launcher-path.txt"); } }
+
+        /// <summary>判断一个目录是否为 DSH 安装根：node 运行时与主程序缺一不可。</summary>
+        public static bool IsValidRoot(string dir)
+        {
+            if (string.IsNullOrEmpty(dir)) return false;
+            try
+            {
+                if (!Directory.Exists(dir)) return false;
+                if (!File.Exists(Path.Combine(dir, @"node\node.exe"))) return false;
+                if (!File.Exists(Path.Combine(dir, @"dsh\node_modules\@deepseek-ai\dsh\lib\bin.js"))) return false;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static string ReadSaved()
+        {
+            try
+            {
+                if (!File.Exists(ConfigFile)) return null;
+                string s = File.ReadAllText(ConfigFile, Encoding.UTF8).Trim();
+                return s.Length == 0 ? null : s;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>记住一个根目录，下次启动直接命中。</summary>
+        public static bool Save(string root)
+        {
+            try { File.WriteAllText(ConfigFile, root, new UTF8Encoding(false)); return true; }
+            catch { return false; }
+        }
+
+        /// <summary>忘掉记住的路径，回到纯自动探测。</summary>
+        public static void Forget()
+        {
+            try { if (File.Exists(ConfigFile)) File.Delete(ConfigFile); } catch { }
+        }
+
+        /// <summary>按优先级列出候选目录；重复项由 IsValidRoot 自然过滤掉。</summary>
+        private static List<string> Candidates()
+        {
+            List<string> list = new List<string>();
+
+            string saved = ReadSaved();
+            if (!string.IsNullOrEmpty(saved)) list.Add(saved);
+
+            string envRoot = Environment.GetEnvironmentVariable("DSH_ROOT");
+            if (!string.IsNullOrEmpty(envRoot)) list.Add(envRoot);
+
+            // DSH_HOME 通常就是 <root>\home，顺便把它的上级也纳入候选
+            string envHome = Environment.GetEnvironmentVariable("DSH_HOME");
+            if (!string.IsNullOrEmpty(envHome))
+            {
+                list.Add(envHome);
+                try
+                {
+                    string parent = Path.GetDirectoryName(envHome.TrimEnd('\\', '/'));
+                    if (!string.IsNullOrEmpty(parent)) list.Add(parent);
+                }
+                catch { }
+            }
+
+            // 本程序所在目录，以及向上 4 级：便携部署常把 exe 放在 root 或其子目录里
+            string dir = AppDir;
+            for (int i = 0; i < 4 && !string.IsNullOrEmpty(dir); i++)
+            {
+                list.Add(dir);
+                try
+                {
+                    DirectoryInfo p = Directory.GetParent(dir);
+                    dir = (p == null) ? null : p.FullName;
+                }
+                catch { dir = null; }
+            }
+
+            // 常见安装位置
+            string[] names = new string[] { "DeepSeekHarness", "DSH" };
+            string[] bases = new string[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                @"C:\", @"D:\", @"E:\", @"F:\", @"G:\"
+            };
+            foreach (string b in bases)
+            {
+                if (string.IsNullOrEmpty(b)) continue;
+                foreach (string n in names)
+                {
+                    try { list.Add(Path.Combine(b, n)); } catch { }
+                }
+            }
+
+            try { list.Add(Environment.CurrentDirectory); } catch { }
+
+            return list;
+        }
+
+        /// <summary>解析 DSH 安装位置；结果写入 Root / Home / Found / Note，任何时候调用都安全。</summary>
+        public static bool Resolve()
+        {
+            foreach (string cand in Candidates())
+            {
+                if (!IsValidRoot(cand)) continue;
+                Root = cand;
+                Found = true;
+                Home = ResolveHome(cand);
+                Note = "已找到 DSH：" + cand;
+                return true;
+            }
+
+            Root = null;
+            Found = false;
+            Home = ResolveHome(null);
+            Note = "未找到 DSH 安装（需要同时存在 node\\node.exe 与 dsh 主程序）";
+            return false;
+        }
+
+        /// <summary>确定 DSH_HOME：环境变量 → &lt;root&gt;\home → %USERPROFILE%\.dsh。</summary>
+        public static string ResolveHome(string root)
+        {
+            string env = Environment.GetEnvironmentVariable("DSH_HOME");
+            if (!string.IsNullOrEmpty(env) && Directory.Exists(env)) return env;
+
+            if (!string.IsNullOrEmpty(root))
+            {
+                string h = Path.Combine(root, "home");
+                if (Directory.Exists(h)) return h;
+            }
+
+            try
+            {
+                return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh");
+            }
+            catch { return ".dsh"; }
+        }
+
+        [DllImport("kernel32.dll")]
+        private static extern bool AttachConsole(int dwProcessId);
+
+        /// <summary>
+        /// 写出解析过程与结果（供 --where 诊断）：先试父控制台，再落一份到 exe 旁的
+        /// launcher-where.txt —— 本程序是 winexe，没有控制台时也不至于什么都看不到。
+        /// </summary>
+        public static void DumpToConsole()
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("DSH 启动器 —— 安装位置诊断");
+            sb.AppendLine("--------------------------------------------------");
+            sb.AppendLine("本程序目录 : " + AppDir);
+            sb.AppendLine("找到安装   : " + (Found ? "是" : "否"));
+            sb.AppendLine("DSH 根目录 : " + (string.IsNullOrEmpty(Root) ? "(未找到)" : Root));
+            sb.AppendLine("DSH_HOME   : " + (string.IsNullOrEmpty(Home) ? "(未找到)" : Home));
+            sb.AppendLine("node.exe   : " + Show(Cfg.NodeExe));
+            sb.AppendLine("DSH 主程序 : " + Show(Cfg.DshBin));
+            sb.AppendLine("记录文件   : " + ConfigFile);
+            sb.AppendLine("说明       : " + Note);
+            sb.AppendLine();
+            sb.AppendLine("候选目录判定（命中 = 同时具备 node 运行时与 DSH 主程序）：");
+            foreach (string c in Candidates())
+                sb.AppendLine("  [" + (IsValidRoot(c) ? "命中" : " -- ") + "] " + c);
+
+            string text = sb.ToString();
+            try
+            {
+                AttachConsole(-1);
+                Console.Out.Write(text);
+                Console.Out.Flush();
+            }
+            catch { }
+            try { File.WriteAllText(Path.Combine(AppDir, "launcher-where.txt"), text, new UTF8Encoding(false)); } catch { }
+        }
+
+        private static string Show(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return "(未找到)";
+            try { return path + (File.Exists(path) ? "  [存在]" : "  [缺失]"); }
+            catch { return path; }
+        }
+    }
+
+    /// <summary>运行期配置。路径五项来自 DshLocator，在 Main 入口解析后填充。</summary>
     static class Cfg
     {
         public const int Port = 3080;
-        public const string Home = @"E:\DeepSeekHarness\home";
-        public const string NodeExe = @"E:\DeepSeekHarness\node\node.exe";
-        public const string NodeDir = @"E:\DeepSeekHarness\node";
-        public const string DshBin = @"E:\DeepSeekHarness\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js";
         public const string Url = "http://127.0.0.1:3080";
+
+        /// <summary>DSH 根目录；未找到安装时为 null。</summary>
+        public static string Root { get { return DshLocator.Root; } }
+        /// <summary>DSH_HOME；永不为 null。</summary>
+        public static string Home { get { return DshLocator.Home; } }
+        /// <summary>node 可执行文件；未找到安装时为 null。</summary>
+        public static string NodeExe { get { return Under(DshLocator.Root, @"node\node.exe"); } }
+        /// <summary>node 运行时目录；未找到安装时为 null。</summary>
+        public static string NodeDir { get { return Under(DshLocator.Root, "node"); } }
+        /// <summary>DSH 主程序入口；未找到安装时为 null。</summary>
+        public static string DshBin { get { return Under(DshLocator.Root, @"dsh\node_modules\@deepseek-ai\dsh\lib\bin.js"); } }
+
+        private static string Under(string root, string rel)
+        {
+            if (string.IsNullOrEmpty(root)) return null;
+            try { return Path.Combine(root, rel); } catch { return null; }
+        }
     }
 
     /// 统一的 DPI 缩放层：设计稿按 96 DPI 写，运行时按实际 DPI 放大。
@@ -170,7 +402,7 @@ namespace DshLauncher
     {
         // ---- 设计稿尺寸（96 DPI 基准）----
         private const int DW = 448;
-        private const int DH = 560;
+        private const int DH = 630;
         private const int MARGIN = 20;
         private const int CARD_Y = 88;
         private const int CARD_H = 118;
@@ -178,10 +410,11 @@ namespace DshLauncher
         private const int BTN_H = 56;
         private const int BTN_GAP = 16;
         private const int BTN_Y = 226;
-        private const int LOG_Y = 394;
+        private const int BTN_ROW = BTN_H + 14;
+        private const int LOG_Y = 464;
         private const int LOG_H = 146;
 
-        private RoundedButton _bStart, _bRestart, _bOpen, _bStop;
+        private RoundedButton _bStart, _bRestart, _bOpen, _bStop, _bInstall, _bPickRoot;
         private CloseButton _bClose;
         private TextBox _log;
         private System.Windows.Forms.Timer _stateTimer;
@@ -199,6 +432,8 @@ namespace DshLauncher
         private Point _dragOffset;
         private bool _firstShow = true;
         private bool _closeAnimDone;
+        /// <summary>安装 / 部署进行中：期间禁用相关按钮，避免并发操作。</summary>
+        private bool _installBusy;
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
@@ -225,15 +460,20 @@ namespace DshLauncher
             this.Controls.Add(_bClose);
 
             int bx2 = MARGIN + BTN_W + BTN_GAP;
+            int by3 = BTN_Y + BTN_ROW * 2;
             _bStart = MakeButton("启动 DSH", MARGIN, BTN_Y, true);
             _bRestart = MakeButton("重启 DSH", bx2, BTN_Y, false);
-            _bOpen = MakeButton("打开页面", MARGIN, BTN_Y + BTN_H + 14, false);
-            _bStop = MakeButton("停止 DSH", bx2, BTN_Y + BTN_H + 14, false);
+            _bOpen = MakeButton("打开页面", MARGIN, BTN_Y + BTN_ROW, false);
+            _bStop = MakeButton("停止 DSH", bx2, BTN_Y + BTN_ROW, false);
+            _bInstall = MakeButton("一键安装 DSH", MARGIN, by3, false);
+            _bPickRoot = MakeButton("指定已有目录", bx2, by3, false);
 
             _bStart.Click += delegate { DoStart(); };
             _bRestart.Click += delegate { DoRestart(); };
             _bOpen.Click += delegate { DoOpen(); };
             _bStop.Click += delegate { DoStop(); };
+            _bInstall.Click += delegate { DoInstall(); };
+            _bPickRoot.Click += delegate { DoPickRoot(); };
 
             _log = new TextBox();
             _log.SetBounds(UI.P(MARGIN + 12), UI.P(LOG_Y + 10), UI.P(DW - MARGIN * 2 - 24), UI.P(LOG_H - 20));
@@ -540,10 +780,12 @@ namespace DshLauncher
 
         private void ApplyRunning(bool running)
         {
-            _bStart.Enabled = !running;
-            _bRestart.Enabled = running;
-            _bOpen.Enabled = running;
-            _bStop.Enabled = running;
+            _bStart.Enabled = !running && !_installBusy;
+            _bRestart.Enabled = running && !_installBusy;
+            _bOpen.Enabled = running && !_installBusy;
+            _bStop.Enabled = running && !_installBusy;
+            _bInstall.Enabled = !_installBusy;
+            _bPickRoot.Enabled = !_installBusy;
         }
 
         private void RefreshState()
@@ -652,7 +894,14 @@ namespace DshLauncher
         private void DoStart()
         {
             if (IsListening()) { Log("DSH 已经在运行，直接打开页面"); Log("（上面的日志只在由本启动器拉起 DSH 时刷新；DSH 输出文件：" + DshLogPath + "）"); DoOpen(); return; }
-            if (!File.Exists(Cfg.NodeExe)) { Log("[X] 找不到 node.exe：" + Cfg.NodeExe); return; }
+            if (!DshLocator.Found || !File.Exists(Cfg.NodeExe))
+            {
+                Log("[X] 没有找到可用的 DSH 安装。");
+                Log("    " + DshLocator.Note);
+                Log("    已探测：记住的路径、本程序所在目录及上级、DSH_ROOT / DSH_HOME、常见安装目录、各盘符根目录。");
+                Log("    手动指定：把 DSH 根目录写进 " + DshLocator.ConfigFile);
+                return;
+            }
 
             try
             {
@@ -745,6 +994,360 @@ namespace DshLauncher
             DoStart();
         }
 
+        // ==================== DSH 定位 / 安装部署 ====================
+
+        /// <summary>内置兜底 Node 版本：镜像查不到时仍然能装上。</summary>
+        private const string FallbackNodeVersion = "v22.20.0";
+
+        /// <summary>弹出选择文件夹的对话框；取消返回 null。</summary>
+        private string PickFolder(string title, string initial)
+        {
+            using (FolderBrowserDialog d = new FolderBrowserDialog())
+            {
+                d.Description = title;
+                d.ShowNewFolderButton = true;
+                if (!string.IsNullOrEmpty(initial) && Directory.Exists(initial)) d.SelectedPath = initial;
+                return (d.ShowDialog(this) == DialogResult.OK) ? d.SelectedPath : null;
+            }
+        }
+
+        /// <summary>指定一个已经装好的 DSH 目录，记住它并立即生效。</summary>
+        private void DoPickRoot()
+        {
+            string init = DshLocator.Found
+                ? DshLocator.Root
+                : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            string dir = PickFolder("选中 DSH 根目录（该目录下应同时有 node\\ 与 dsh\\）", init);
+            if (string.IsNullOrEmpty(dir)) return;
+
+            if (!DshLocator.IsValidRoot(dir))
+            {
+                Log("[X] 这个目录不是可用的 DSH 安装：" + dir);
+                Log("    需要同时存在 node\\node.exe 与 dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js");
+                MessageBox.Show(this,
+                    "该目录下找不到完整的 DSH 安装。\n\n需要同时存在：\n  node\\node.exe\n  dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
+                    "DSH 启动器", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            DshLocator.Save(dir);
+            DshLocator.Resolve();
+            Log("已指定 DSH 目录：" + dir);
+            Log("（已写入 " + DshLocator.ConfigFile + "，下次启动直接命中）");
+            RefreshState();
+        }
+
+        /// <summary>一键安装：选目录 → 取 Node 运行时 → npm 安装 @deepseek-ai/dsh。</summary>
+        private void DoInstall()
+        {
+            if (_installBusy) return;
+
+            string suggest = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DeepSeekHarness");
+            string root = PickFolder("选择 DSH 的安装位置（会在其中创建 node\\ 与 dsh\\）", suggest);
+            if (string.IsNullOrEmpty(root)) return;
+
+            if (DshLocator.IsValidRoot(root))
+            {
+                DshLocator.Save(root);
+                DshLocator.Resolve();
+                Log("该目录已经是可用的 DSH 安装，已切换过去：" + root);
+                RefreshState();
+                return;
+            }
+
+            _installBusy = true;
+            RefreshState();
+            AttachPanelInstallSink();
+            _installDone = delegate
+            {
+                _installBusy = false;
+                try { this.BeginInvoke(new Action(delegate { RefreshState(); })); } catch { }
+            };
+            string target = root;
+            ThreadPool.QueueUserWorkItem(delegate { InstallWorker(target); });
+        }
+
+        /// <summary>安装流程本体，跑在后台线程；所有界面更新经 LogAsync 切回主线程。</summary>
+        private static void InstallWorker(string root)
+        {
+            try
+            {
+                // 已经是可用的 DSH 安装就直接接管，绝不重装：--install 若指向一个已有安装，
+                // 重跑 npm install 会把它换成 latest 标签的版本（对跑 next 的安装是静默降级）。
+                if (DshLocator.IsValidRoot(root))
+                {
+                    LogAsync("该目录已经是可用的 DSH 安装，无需安装：" + root);
+                    DshLocator.Save(root);
+                    if (DshLocator.Resolve()) LogAsync("已切换到：" + DshLocator.Root);
+                    return;
+                }
+
+                LogAsync("—— 开始安装 DSH ——");
+                LogAsync("目标目录：" + root);
+                Directory.CreateDirectory(root);
+
+                // ① Node 运行时
+                string nodeDir = Path.Combine(root, "node");
+                if (File.Exists(Path.Combine(nodeDir, "node.exe")))
+                {
+                    LogAsync("① Node 运行时已存在，跳过");
+                }
+                else
+                {
+                    string ver = PickNodeVersion();
+                    LogAsync("① 获取 Node 运行时 " + ver);
+
+                    string zip = Path.Combine(Path.GetTempPath(), "dsh-launcher-node-" + ver + ".zip");
+                    string url = "https://npmmirror.com/mirrors/node/" + ver + "/node-" + ver + "-win-x64.zip";
+                    LogAsync("   下载：" + url);
+
+                    long lastTick = 0;
+                    DownloadFile(url, zip, delegate(long got, long total)
+                    {
+                        long now = Environment.TickCount;
+                        if (now - lastTick < 1500 && (total <= 0 || got != total)) return;
+                        lastTick = now;
+                        string pct = total > 0 ? ("  " + (got * 100 / total) + "%") : "";
+                        LogAsync("   " + (got / 1048576) + " / " + (total > 0 ? (total / 1048576).ToString() : "?") + " MB" + pct);
+                    });
+
+                    LogAsync("   解压到 " + nodeDir);
+                    ExtractArchiveStrippingTop(zip, nodeDir);
+                    try { File.Delete(zip); } catch { }
+
+                    if (!File.Exists(Path.Combine(nodeDir, "node.exe")))
+                    {
+                        LogAsync("[X] 解压后仍找不到 node.exe，安装中止");
+                        return;
+                    }
+                }
+
+                // ② 安装 @deepseek-ai/dsh
+                string dshDir = Path.Combine(root, "dsh");
+                Directory.CreateDirectory(dshDir);
+                string pkg = Path.Combine(dshDir, "package.json");
+                if (!File.Exists(pkg))
+                {
+                    File.WriteAllText(pkg,
+                        "{\"name\":\"dsh-install-root\",\"version\":\"1.0.0\",\"private\":true,\"dependencies\":{}}"
+                        + Environment.NewLine,
+                        new UTF8Encoding(false));
+                }
+
+                LogAsync("② 安装 @deepseek-ai/dsh（npm，首次可能要几分钟）…");
+                int code = RunNpm(root, dshDir);
+                if (code != 0)
+                {
+                    LogAsync("[X] npm 安装失败（退出码 " + code + "），安装中止");
+                    return;
+                }
+
+                // ③ DSH_HOME
+                string home = Path.Combine(root, "home");
+                Directory.CreateDirectory(home);
+                LogAsync("③ 已准备 DSH_HOME：" + home);
+
+                // ④ 记住路径并重新解析
+                DshLocator.Save(root);
+                if (!DshLocator.Resolve())
+                {
+                    LogAsync("[X] 安装后仍解析失败，请用「指定已有目录」手动选中 " + root);
+                    return;
+                }
+
+                LogAsync("✔ 安装完成：" + DshLocator.Root);
+                LogAsync("   现在可以点「启动 DSH」了。");
+            }
+            catch (Exception ex)
+            {
+                LogAsync("[X] 安装失败：" + ex.Message);
+            }
+            finally
+            {
+                Action done = _installDone;
+                if (done != null) { try { done(); } catch { } }
+            }
+        }
+
+        /// <summary>查一个可用的 Node LTS 版本号（形如 v22.20.0）；失败时回退到内置版本。</summary>
+        private static string PickNodeVersion()
+        {
+            try
+            {
+                string json = HttpGetText("https://npmmirror.com/mirrors/node/index.json");
+                if (json != null)
+                {
+                    // 版本列表里每项一个对象；lts 为字符串表示是 LTS，false 表示不是。
+                    System.Text.RegularExpressions.MatchCollection ms =
+                        System.Text.RegularExpressions.Regex.Matches(
+                            json, "\"version\"\\s*:\\s*\"(v[0-9]+\\.[0-9]+\\.[0-9]+)\"[^{}]*?\"lts\"\\s*:\\s*\"");
+                    if (ms.Count > 0) return ms[0].Groups[1].Value;
+                }
+            }
+            catch { }
+            return FallbackNodeVersion;
+        }
+
+        private static string HttpGetText(string url)
+        {
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.UserAgent = "DSH-Launcher";
+                req.Timeout = 10000;
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (Stream s = resp.GetResponseStream())
+                using (StreamReader r = new StreamReader(s, Encoding.UTF8))
+                    return r.ReadToEnd();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>下载到文件，逐块回调进度（total 在服务端不给长度时为 -1）。</summary>
+        private static void DownloadFile(string url, string dest, Action<long, long> progress)
+        {
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+            req.UserAgent = "DSH-Launcher";
+            req.Timeout = 30000;
+            req.ReadWriteTimeout = 120000;
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            using (Stream src = resp.GetResponseStream())
+            using (FileStream dst = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                long total = resp.ContentLength;
+                byte[] buf = new byte[131072];
+                long got = 0;
+                int n;
+                while ((n = src.Read(buf, 0, buf.Length)) > 0)
+                {
+                    dst.Write(buf, 0, n);
+                    got += n;
+                    if (progress != null) progress(got, total);
+                }
+            }
+        }
+
+        /// <summary>解压 zip 并剥掉公共顶层目录（Node 的包都带一层 node-vX-win-x64\）。</summary>
+        private static void ExtractArchiveStrippingTop(string zip, string dest)
+        {
+            Directory.CreateDirectory(dest);
+            using (ZipArchive a = ZipFile.OpenRead(zip))
+            {
+                string prefix = null;
+                foreach (ZipArchiveEntry e in a.Entries)
+                {
+                    string full = e.FullName.Replace('\\', '/');
+                    int slash = full.IndexOf('/');
+                    if (slash < 0) { prefix = null; break; }
+                    string top = full.Substring(0, slash + 1);
+                    if (prefix == null) prefix = top;
+                    else if (prefix != top) { prefix = null; break; }
+                }
+
+                foreach (ZipArchiveEntry e in a.Entries)
+                {
+                    string full = e.FullName.Replace('\\', '/');
+                    string rel = (prefix != null && full.StartsWith(prefix)) ? full.Substring(prefix.Length) : full;
+                    if (rel.Length == 0) continue;
+
+                    string target = Path.Combine(dest, rel.Replace('/', '\\'));
+                    if (full.EndsWith("/"))
+                    {
+                        Directory.CreateDirectory(target);
+                        continue;
+                    }
+                    string parent = Path.GetDirectoryName(target);
+                    if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+                    e.ExtractToFile(target, true);
+                }
+            }
+        }
+
+        /// <summary>在 dsh 目录里跑 npm install；返回退出码。</summary>
+        private static int RunNpm(string root, string dshDir)
+        {
+            string npm = Path.Combine(root, @"node\npm.cmd");
+            if (!File.Exists(npm)) { LogAsync("[X] 找不到 npm：" + npm); return -1; }
+
+            ProcessStartInfo psi = new ProcessStartInfo("cmd.exe");
+            psi.Arguments = "/s /c \"\"" + npm + "\" install @deepseek-ai/dsh"
+                          + " --registry https://registry.npmmirror.com --no-fund --no-audit\"";
+            psi.WorkingDirectory = dshDir;
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+
+            using (Process p = new Process())
+            {
+                p.StartInfo = psi;
+                p.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) LogAsync("   " + e.Data); };
+                p.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) LogAsync("   " + e.Data); };
+                p.Start();
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+                p.WaitForExit();
+                return p.ExitCode;
+            }
+        }
+
+        // ---- 安装流程的日志出口与完成回调，由调用方注入。
+        //      面板模式把日志切回 UI 线程，无界面 --install 直接写文件，
+        //      两种模式共用同一套 InstallWorker 实现。
+        private static Action<string> _installLog;
+        private static Action _installDone;
+
+        /// <summary>从后台线程安全地写日志；尚未注入出口时静默丢弃。</summary>
+        private static void LogAsync(string msg)
+        {
+            Action<string> sink = _installLog;
+            if (sink == null) return;
+            try { sink(msg); } catch { }
+        }
+
+        /// <summary>把安装日志接到本面板上（切回 UI 线程执行）。</summary>
+        private void AttachPanelInstallSink()
+        {
+            _installLog = delegate(string m)
+            {
+                try { this.BeginInvoke(new Action(delegate { Log(m); })); } catch { }
+            };
+        }
+
+        /// <summary>
+        /// 无界面安装（<c>--install &lt;目录&gt;</c>）：日志逐行写 launcher-install.log，
+        /// 并尝试附到父控制台。安装完把路径记进 launcher-path.txt。
+        /// </summary>
+        private static void RunHeadlessInstall(string root)
+        {
+            string logPath = Path.Combine(DshLocator.AppDir, "launcher-install.log");
+            try { File.WriteAllText(logPath, "", new UTF8Encoding(false)); } catch { }
+            try { AttachConsole(ATTACH_PARENT_PROCESS); } catch { }
+
+            _installLog = delegate(string m)
+            {
+                try { Console.Out.WriteLine(m); Console.Out.Flush(); } catch { }
+                try { File.AppendAllText(logPath, m + Environment.NewLine, new UTF8Encoding(false)); } catch { }
+            };
+
+            InstallWorker(root);
+
+            try
+            {
+                Console.Out.WriteLine("");
+                Console.Out.WriteLine("日志已写入：" + logPath);
+                Console.Out.Flush();
+            }
+            catch { }
+        }
+
+        private const int ATTACH_PARENT_PROCESS = -1;
+
+        [DllImport("kernel32.dll")]
+        private static extern bool AttachConsole(int dwProcessId);
+
 
         /// <summary>从 DSH 输出里抓 launch token，落一份到 $DSH_HOME/guard/logs（供 qq-bridge 自动同步）。</summary>
         private void CaptureTokenLine(string line)
@@ -817,14 +1420,32 @@ namespace DshLauncher
         static void Main(string[] args)
         {
             try { SetProcessDPIAware(); } catch { }
-            bool pageOnly = false;
-            foreach (string a in args) { if (a == "--page") pageOnly = true; }
+
+            // TLS 必须在任何网络请求之前设好：.NET Framework 默认不启用 TLS 1.2，而
+            // npmmirror 与 npm registry 都要求它。放到后面（例如 --install 分支之后）
+            // 会让下载和版本查询直接握手失败："基础连接已经关闭: 接收时发生错误"。
             try
             {
                 ServicePointManager.SecurityProtocol =
                     SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
             }
             catch { }
+
+            // 先解析 DSH 安装位置：Cfg 的路径项依赖它，且 Cfg.Home 必须非 null。
+            DshLocator.Resolve();
+            bool pageOnly = false;
+            bool whereOnly = false;
+            string installTo = null;
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "--page") pageOnly = true;
+                if (args[i] == "--where") whereOnly = true;
+                if (args[i] == "--install" && i + 1 < args.Length) installTo = args[i + 1];
+            }
+            // --where：只报告检测结果（同时落一份 launcher-where.txt），不弹任何窗口
+            if (whereOnly) { DshLocator.DumpToConsole(); return; }
+            // --install <目录>：无界面安装，日志写 exe 旁的 launcher-install.log
+            if (!string.IsNullOrEmpty(installTo)) { RunHeadlessInstall(installTo); return; }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             if (pageOnly) { Application.Run(new PageForm(DshPageUrl.Resolve(Cfg.Url))); return; }
