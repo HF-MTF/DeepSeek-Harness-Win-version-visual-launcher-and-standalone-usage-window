@@ -2,8 +2,8 @@
 
 Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 启动器：**一块面板管启停与日志，一个内嵌窗口看界面 —— 不再往浏览器里塞标签页。**
 
-![启动器面板](docs/panel.png)
-![运行窗口](docs/window.png)
+![启动器面板](docs/bin.png)
+![运行窗口](docs/1.png)
 
 ---
 
