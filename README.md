@@ -1,7 +1,7 @@
 # DSH 启动器 · DSH Launcher
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/HF-MTF/dsh-launcher?label=release)](../../releases/latest)
+[![Release](https://img.shields.io/github/v/release/HF-MTF/HFRin-DSH-Windows-Launcher?label=release)](../../releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-0078D6)](#环境要求)
 [![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4)](#环境要求)
 
@@ -77,7 +77,7 @@ Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 
 | 文件 | 说明 |
 |---|---|
-| `dist\DSH启动器.exe` | 主程序（属性里能看到版本号，当前 1.0.5）|
+| `dist\DSH启动器.exe` | 主程序（属性里能看到版本号，当前 1.0.6）|
 | `dist\Microsoft.Web.WebView2.*.dll` | WebView2 托管库（运行必需）|
 | `dist\WebView2Loader.dll` | 原生加载器（运行必需）|
 | `dist\使用说明.txt` | 面向使用者的说明（常见问题、命令行参数）|

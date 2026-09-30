@@ -1,4 +1,4 @@
-﻿DSH 启动器 v1.0.5 —— 使用说明
+﻿DSH 启动器 v1.0.6 —— 使用说明
 ========================================
 
 这是什么
@@ -6,7 +6,7 @@
   一个内嵌窗口看界面，不再往浏览器里塞标签页。
 
   项目主页
-    https://github.com/HF-MTF/dsh-launcher
+    https://github.com/HF-MTF/HFRin-DSH-Windows-Launcher
 
 怎么用
   1. 把下面这些文件放在同一个目录（三个 dll 是运行必需的）：

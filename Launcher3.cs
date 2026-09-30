@@ -2031,7 +2031,7 @@ namespace DshLauncher
     /// <summary>启动器自带的 DSH 页面窗口（WebView2 + 自绘深色边框），同进程内只开一个。</summary>
     class PageForm : LauncherForm
     {
-        private const string WindowCaption = "DSH-HFRin调试版";
+        private const string WindowCaption = "DSH 工作台";
         private static PageForm _open;
         private WebView2 _web;
         private readonly string _url;
