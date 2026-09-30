@@ -1,0 +1,24 @@
+# ---- 编译中间产物 ----
+build/
+
+# ---- 打包产物 ----
+# 成品包通过 GitHub Releases 的 Assets 分发，不进版本库。
+# 若你希望别人克隆下来就直接拿到打包好的 zip，把下面两行删掉。
+release/
+*.zip
+
+# ---- 本地备份 ----
+*.bak
+*.bak-*
+*.bak2-*
+
+# ---- 运行时生成（不属于源码）----
+launcher-path.txt
+launcher-where.txt
+launcher-install.log
+launcher-error.log
+_max_tl.png
+
+# ---- 系统文件 ----
+Thumbs.db
+desktop.ini
