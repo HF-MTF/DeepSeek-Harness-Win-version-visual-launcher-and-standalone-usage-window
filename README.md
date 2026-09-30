@@ -1,9 +1,18 @@
 # DSH 启动器
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/HF-MTF/DeepSeek-Harness-Win-version-visual-launcher-and-standalone-usage-window?label=release)](../../releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-0078D6)](#环境要求)
+[![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4)](#环境要求)
+
 Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 启动器：**一块面板管启停与日志，一个内嵌窗口看界面 —— 不再往浏览器里塞标签页。**
 
-![启动器面板](docs/bin.png)
-![运行窗口](docs/1.png)
+**[⬇ 下载最新成品包](../../releases/latest)** —— 解压即用，不用编译、不用改任何配置。
+
+<p align="center">
+  <img src="docs/screenshot-panel.png" width="30%" alt="启动器面板">
+  <img src="docs/screenshot-window.png" width="68%" alt="运行窗口">
+</p>
 
 ---
 
@@ -56,11 +65,15 @@ Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 | WebView2 Runtime | Win11 随 Edge 自带；Win10 可能需[单独安装](https://developer.microsoft.com/microsoft-edge/webview2/) |
 | DeepSeek Harness | 已安装的 `@deepseek-ai/dsh`（Node 运行时 + 主程序）|
 
-## 直接运行（不用编译）
+## 下载
 
-不想编译的话，`release\` 里有打包好的 **成品包**（`DSH启动器-成品-*.zip`）：解压到任意目录、双击 exe 就能用，启动器会自己找到 DSH。
+| 方式 | 说明 |
+|---|---|
+| **成品包（推荐）** | 到 [Releases](../../releases/latest) 下载 `DSH启动器-成品-*.zip`，解压到任意目录，双击 exe 就能用 —— 启动器会自己找到 DSH |
+| **自己编译** | 见下方[「快速开始 → 自己编译」](#自己编译)，只需要 .NET Framework 自带的 `csc.exe`，不用装 .NET SDK |
 
-`dist\` 里放的就是成品包的内容：
+> 仓库里的 `release/`、`build/` 是本地构建目录，**没有纳入版本库**（见 [.gitignore](.gitignore)）。
+> `dist/` 是成品目录，内容与成品包一致：
 
 | 文件 | 说明 |
 |---|---|
@@ -160,7 +173,7 @@ DSH启动器.exe --install "D:\DeepSeekHarness"
 ## 目录结构
 
 ```
-launcher-src/
+仓库根目录
 ├─ Launcher3.cs                 启动器主体（面板 + 运行窗口 + 自绘边框 + 定位/安装）
 ├─ build.ps1                    编译 + 自动定位 + 部署 + 冒烟 + 同步 dist
 ├─ 一键编译并部署.bat           双击即跑 build.ps1（全流程）
@@ -170,11 +183,19 @@ launcher-src/
 ├─ whale64.png                  备用素材
 ├─ README.md                    本文件
 ├─ README-源码说明.txt          实现备注与踩坑记录
-├─ lib/                         WebView2 SDK（编译引用，运行时也要）
+├─ CHANGELOG.md                 更新记录
+├─ CONTRIBUTING.md              怎么提 Issue / PR、编译方式、编码约定
+├─ SECURITY.md                  安全问题怎么私下报告
+├─ LICENSE                      MIT
+├─ .gitattributes               换行符与二进制处理规则
+├─ .github/                     Issue 表单、PR 模板、CI（编译验证）
+├─ lib/                         WebView2 SDK（编译引用，运行也需要）
 ├─ docs/                        README 配图
-├─ dist/                        发布成品（exe + 3 个运行库），解压即用
-├─ release/                     打包好的 zip（源码包 / 成品包）
-└─ build/                       编译中间产物，可随时删
+└─ dist/                        发布成品（exe + 3 个运行库），解压即用
+
+不纳入版本库（.gitignore）
+├─ build/                       编译中间产物，可随时删
+└─ release/                     本地打包出来的 zip（正式分发走 Releases）
 ```
 
 ## 实现要点
@@ -209,6 +230,14 @@ launcher-src/
 
 见 [CHANGELOG.md](CHANGELOG.md)。
 
+## 参与贡献
+
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。简单说：
+
+- 遇到问题 → 走 [Issues](../../issues/new/choose) 里的表单，按提示填就行
+- 安全漏洞 → 别开公开 Issue，见 [SECURITY.md](SECURITY.md)
+- 想改代码 → 直接提 PR；改完跑一次 `build.ps1 -NoDeploy -NoSmoke` 确认能编译
+
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 HF-MTF and HFRin
