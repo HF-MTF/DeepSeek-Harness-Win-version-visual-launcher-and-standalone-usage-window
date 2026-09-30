@@ -1,0 +1,44 @@
+name: 功能建议
+description: 想要某个能力，或觉得某处体验可以更好
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        想法不分大小，但请先说清楚**要解决什么问题**，而不是直接给方案 ——
+        这样可能有更省事的做法。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的麻烦
+      description: 现在是怎么别扭的？
+      placeholder: 每次都要先手动开 ……
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你希望的解决方式
+      description: 如果有具体想法就写；没有也没关系
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 大致属于哪一块
+      options:
+        - 面板窗口
+        - 运行窗口（WebView2）
+        - 安装 / 部署 DSH
+        - 命令行参数
+        - 文档 / 打包 / 仓库
+        - 其他
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: 参与意愿
+      options:
+        - label: 我愿意自己提 PR 实现它
