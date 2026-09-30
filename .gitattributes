@@ -1,0 +1,22 @@
+# 换行符统一成 CRLF（Windows 项目，脚本与批处理对换行敏感）
+* text=auto eol=crlf
+
+# 源码与脚本：明确锁定换行符
+*.cs    text eol=crlf
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# 二进制：禁止任何转换
+*.png   binary
+*.ico   binary
+*.dll   binary
+*.exe   binary
+*.zip   binary
+
+# ---------------------------------------------------------------------------
+# 注意：本项目的编码有两条硬要求，写在这里当备忘录（.gitattributes 管不了 BOM）
+#   · build.ps1 必须是 UTF-8 **with BOM**
+#     —— 否则 Windows PowerShell 5.1 会按 GBK 解码，报一堆 "Unexpected token"
+#   · 一键编译并部署.bat 必须 **不能**有 BOM
+# ---------------------------------------------------------------------------
