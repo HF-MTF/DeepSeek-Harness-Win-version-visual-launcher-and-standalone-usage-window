@@ -1,0 +1,50 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compile:
+    name: 编译验证
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 这个项目对编码有硬要求：build.ps1 一旦丢了 BOM，Windows PowerShell 5.1
+      # 会按 GBK 解码并抛一堆 "Unexpected token"，而那种报错完全看不出真实原因。
+      # 放一步显式检查，比事后猜要省事。
+      - name: 检查编码要求
+        shell: pwsh
+        run: |
+          $b = [System.IO.File]::ReadAllBytes('build.ps1')
+          $hasBom = $b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF
+          if (-not $hasBom) {
+            throw 'build.ps1 丢失了 UTF-8 BOM —— Windows PowerShell 5.1 会按 GBK 解码并报语法错误'
+          }
+          Write-Host 'build.ps1 BOM 正常'
+
+          $bat = [System.IO.File]::ReadAllBytes('一键编译并部署.bat')
+          $batHasBom = $bat.Length -ge 3 -and $bat[0] -eq 0xEF -and $bat[1] -eq 0xBB -and $bat[2] -eq 0xBF
+          if ($batHasBom) {
+            throw '一键编译并部署.bat 带上了 BOM —— cmd.exe 会在第一行报错'
+          }
+          Write-Host '一键编译并部署.bat 无 BOM，正常'
+
+      - name: 编译（只编译，不部署）
+        shell: powershell
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          .\build.ps1 -NoDeploy -NoSmoke
+
+      - name: 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSH-launcher
+          path: |
+            build/DSH启动器.exe
+            build/*.dll
+          if-no-files-found: warn
