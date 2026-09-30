@@ -1,0 +1,79 @@
+name: 报告问题
+description: 启动器打不开 / 装不上 / 界面异常 / 行为不对
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。填得越全，定位越快。
+        如果只是想问「怎么用」，请走下面的 Discussions 链接，别开 Issue。
+
+  - type: input
+    id: launcher_version
+    attributes:
+      label: 启动器版本
+      description: Release 号，或下载日期
+      placeholder: "V1.0.4 / 2026-09-30 下载"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: "Win11 23H2 / Win10 22H2 19045"
+    validations:
+      required: true
+
+  - type: input
+    id: dsh_path
+    attributes:
+      label: DSH 安装位置与版本
+      description: 面板日志里会打印检测到的路径；不确定就填「未知」
+      placeholder: "E:\\DeepSeekHarness"
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 出问题的环节（可多选）
+      multiple: true
+      options:
+        - 启动 / 重启 / 停止 DSH
+        - 一键安装 DSH
+        - 运行窗口（WebView2 页面）
+        - 面板界面 / 显示
+        - 关窗口 / 退出 / 再次打开
+        - 其他
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 现象与复现步骤
+      description: 做了什么、期望是什么、实际发生了什么
+      placeholder: |
+        1. 双击 DSH启动器.exe
+        2. 点「启动 DSH」
+        3. 面板日志停在 ……
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: |
+        把 exe 同目录下这些文件的内容贴进来（有哪个贴哪个）：
+        · launcher-error.log    —— 未处理异常
+        · launcher-where.txt    —— DSH 位置检测结果
+        · launcher-install.log  —— 一键安装的完整输出
+      render: text
+
+  - type: checkboxes
+    id: self_check
+    attributes:
+      label: 自查
+      options:
+        - label: 任务管理器里没有残留的「DSH启动器.exe」（关掉窗口后进程应当自动退出）
+        - label: 已确认同一时间只有一个启动器实例在运行
+        - label: 我贴出来的日志里没有 API key、token 等敏感信息
