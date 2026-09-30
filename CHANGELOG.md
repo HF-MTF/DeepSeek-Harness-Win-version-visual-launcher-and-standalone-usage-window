@@ -9,6 +9,8 @@
   任务栏显示、以及网页标题变化后的回填都会跟着变。
 - **仓库更名为 `HFRin-DSH-Windows-Launcher`** —— GitHub 会自动 301 重定向旧链接，
   已发出的地址不会失效。
+- **补齐贡献者公约** —— 新增 `CODE_OF_CONDUCT.md`（Contributor Covenant v2.1），
+  举报渠道走 GitHub 而不是公开邮箱。至此 GitHub 社区规范检查的六项文件全部齐备。
 
 ## v1.0.5 — 2026-09-30
 

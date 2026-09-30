@@ -190,6 +190,7 @@ DSH启动器.exe --install "D:\DeepSeekHarness"
 ├─ README-源码说明.txt          实现备注与踩坑记录
 ├─ CHANGELOG.md                 更新记录
 ├─ CONTRIBUTING.md              怎么提 Issue / PR、编译方式、编码约定
+├─ CODE_OF_CONDUCT.md           贡献者公约（行为准则）
 ├─ SECURITY.md                  安全问题怎么私下报告
 ├─ LICENSE                      MIT
 ├─ .gitattributes               换行符与二进制处理规则
@@ -242,6 +243,7 @@ DSH启动器.exe --install "D:\DeepSeekHarness"
 - 遇到问题 → 走 [Issues](../../issues/new/choose) 里的表单，按提示填就行
 - 安全漏洞 → 别开公开 Issue，见 [SECURITY.md](SECURITY.md)
 - 想改代码 → 直接提 PR；改完跑一次 `build.ps1 -NoDeploy -NoSmoke` 确认能编译
+- 交流请遵守 [贡献者公约](CODE_OF_CONDUCT.md)：友善、尊重、对事不对人
 
 ## License
 
