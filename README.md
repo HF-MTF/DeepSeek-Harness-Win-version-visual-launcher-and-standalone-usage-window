@@ -1,7 +1,7 @@
-# DSH 启动器
+# DSH 启动器 · DSH Launcher
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/HF-MTF/DeepSeek-Harness-Win-version-visual-launcher-and-standalone-usage-window?label=release)](../../releases/latest)
+[![Release](https://img.shields.io/github/v/release/HF-MTF/dsh-launcher?label=release)](../../releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-0078D6)](#环境要求)
 [![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4)](#环境要求)
 

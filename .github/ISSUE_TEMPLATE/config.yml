@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: 使用问题 / 随便聊聊
-    url: https://github.com/HF-MTF/DeepSeek-Harness-Win-version-visual-launcher-and-standalone-usage-window/discussions
+    url: https://github.com/HF-MTF/dsh-launcher/discussions
     about: 装不上、不会用、想提想法 —— 先来这里，比开 Issue 更快
   - name: 安全漏洞（请勿公开提交）
-    url: https://github.com/HF-MTF/DeepSeek-Harness-Win-version-visual-launcher-and-standalone-usage-window/security/advisories/new
+    url: https://github.com/HF-MTF/dsh-launcher/security/advisories/new
     about: 私密报告安全问题，见 SECURITY.md

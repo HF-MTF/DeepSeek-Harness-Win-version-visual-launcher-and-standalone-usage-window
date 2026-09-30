@@ -6,7 +6,7 @@
   一个内嵌窗口看界面，不再往浏览器里塞标签页。
 
   项目主页
-    https://github.com/HF-MTF/DeepSeek-Harness-Win-version-visual-launcher-and-standalone-usage-window
+    https://github.com/HF-MTF/dsh-launcher
 
 怎么用
   1. 把下面这些文件放在同一个目录（三个 dll 是运行必需的）：
