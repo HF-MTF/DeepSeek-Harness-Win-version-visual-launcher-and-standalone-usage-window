@@ -2,6 +2,17 @@
 
 ## 2026-09-30
 
+### 新增
+
+- **补齐开源规范文件** —— 之前仓库只有 README，GitHub 社区规范检查的完整度只有 28%。
+  现在补上 `LICENSE`（MIT，© 2026 HF-MTF and HFRin）、`CONTRIBUTING.md`、`SECURITY.md`，
+  以及 `.github/`（Issue 表单、PR 模板、CI 编译验证）和 `.gitattributes`。
+- **README 增加对外入口** —— 顶部加许可证 / 发布 / 平台徽章与「下载最新成品包」直达链接；
+  原先指向 `release\` 的说明改为指向 Releases（那个目录并不在版本库里，访客点进去是空的）；
+  「目录结构」区分了「仓库内容」与「不纳入版本库的本地目录」。
+- **配图改用语义化文件名** —— `docs/1.png` / `docs/bin.png` 改为
+  `docs/screenshot-window.png` / `docs/screenshot-panel.png`，并在 README 里并排显示。
+
 ### 修复
 
 - **关掉窗口后进程不退出，导致再也打不开程序（严重）** —— 关闭面板后启动器变成一个没有窗口、
