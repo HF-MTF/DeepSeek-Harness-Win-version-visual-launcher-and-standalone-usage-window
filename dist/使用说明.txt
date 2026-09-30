@@ -1,0 +1,57 @@
+﻿DSH 启动器 v1.0.5 —— 使用说明
+========================================
+
+这是什么
+  Windows 上的 DeepSeek Harness 启动器：一块面板管启停与日志，
+  一个内嵌窗口看界面，不再往浏览器里塞标签页。
+
+  项目主页
+    https://github.com/HF-MTF/DeepSeek-Harness-Win-version-visual-launcher-and-standalone-usage-window
+
+怎么用
+  1. 把下面这些文件放在同一个目录（三个 dll 是运行必需的）：
+       DSH启动器.exe
+       Microsoft.Web.WebView2.Core.dll
+       Microsoft.Web.WebView2.WinForms.dll
+       WebView2Loader.dll
+  2. 双击 DSH启动器.exe
+
+  启动器会自动找到你的 DSH 安装。同一时间只会运行一个实例，
+  重复双击会把已有窗口叫到前台。
+
+如果提示「DSH 启动器已经在运行了」
+  · 先看任务栏 —— 已有窗口可能被最小化了，或压在别的窗口后面
+  · 如果确实找不到它的窗口，再双击一次：启动器会发现那个卡住的旧实例，
+    问你是否结束它并重新打开。选「是」即可 —— 只结束启动器本身，
+    不会停掉正在运行的 DSH。
+
+如果窗口显示「连不上 DSH」
+  多半是 DSH 不是由本启动器启动的 —— 它的访问凭据（token）只在启动时
+  打印一次，无法事后获取。点面板上的「重启 DSH」让启动器接管一次即可；
+  成功打开一次之后凭据会以 cookie 长期保存，以后就不必再重启。
+
+如果「一键安装 DSH」失败
+  面板日志会给出 npm 的完整报错，并在末尾附上 npm 调试日志的路径。
+  安装失败时会自动重试一次（换官方源并跳过包内构建脚本）。
+
+如果提示「页面窗口初始化失败：数据目录被占用」
+  · 先看看任务栏是不是已经开着启动器了
+  · 还没有的话，打开任务管理器结束所有 msedgewebview2.exe 再重试
+
+环境要求
+  Windows 10 / 11 x64
+  .NET Framework 4.8（Win10 1803+ 自带）
+  WebView2 Runtime（Win11 随 Edge 自带）
+  DeepSeek Harness（没装的话用面板上的「一键安装 DSH」）
+
+命令行
+  DSH启动器.exe --page             只开运行窗口，不显示面板
+  DSH启动器.exe --where            报告 DSH 安装位置的检测结果
+  DSH启动器.exe --install <目录>   无界面安装 DSH
+
+许可证
+  本项目以 MIT 许可证开源，全文见同目录的 LICENSE 文件。
+  Copyright (c) 2026 HF-MTF and HFRin
+
+  内置的 Microsoft.Web.WebView2.Core.dll、Microsoft.Web.WebView2.WinForms.dll
+  与 WebView2Loader.dll 版权归 Microsoft 所有，遵循其各自的许可条款。

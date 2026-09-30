@@ -77,9 +77,11 @@ Windows 上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 
 | 文件 | 说明 |
 |---|---|
-| `dist\DSH启动器.exe` | 主程序 |
+| `dist\DSH启动器.exe` | 主程序（属性里能看到版本号，当前 1.0.5）|
 | `dist\Microsoft.Web.WebView2.*.dll` | WebView2 托管库（运行必需）|
 | `dist\WebView2Loader.dll` | 原生加载器（运行必需）|
+| `dist\使用说明.txt` | 面向使用者的说明（常见问题、命令行参数）|
+| `dist\LICENSE` | MIT 许可证 |
 
 改了源码要重新编译，**双击 `一键编译并部署.bat`** 即可（编译 → 自动检测 DSH 安装位置 → 部署 → 冒烟验证 → 同步 dist）。
 
@@ -115,6 +117,9 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 `build.ps1` 会：编译到 `build\` → **自动检测 DSH 安装位置** → 部署 exe 与三个运行库 → 起一个实例检查最大化是否贴合工作区并截图留证。
 
 可选参数：`-NoDeploy`（只编译）、`-DeployTo <目录>`（指定部署位置）、`-NoSmoke`（跳过冒烟）。
+
+发新版时改 [`AssemblyInfo.cs`](AssemblyInfo.cs) 里的版本号 —— 它会被编译进 exe 属性，
+请与 git tag 保持一致（tag 用小写 `v`，如 `v1.0.5`）。
 
 ## 自动检测 DSH
 

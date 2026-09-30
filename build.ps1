@@ -46,7 +46,7 @@ Write-Host '== 编译 ==' -ForegroundColor Cyan
   /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
   /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll `
   /r:"$lib\Microsoft.Web.WebView2.Core.dll" /r:"$lib\Microsoft.Web.WebView2.WinForms.dll" `
-  "$src\Launcher3.cs"
+  "$src\Launcher3.cs" "$src\AssemblyInfo.cs"
 
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exe)) {
   Write-Host '[X] 编译失败' -ForegroundColor Red
@@ -149,7 +149,11 @@ $bar.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose(); $bar.Dispose()
 Write-Output ('左上角截图: ' + $shot)
 
-# 同步一份到 dist\：随源码一起发布，下载解压即可运行（含运行时需要的 3 个 WebView2 组件）
+# 冒烟用的实例不能留着：--page 同样持有单实例锁，留着会让下一次双击只得到
+# 「DSH 启动器已经在运行了」，而那个被最大化的窗口使用者根本看不见。
+Get-Process -Id $r.ProcessId -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+# 同步一份到 dist\：dist\ 里的全部文件就是成品包的内容，解压即可运行
 $dist = Join-Path $src 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 Copy-Item "$out\DSH启动器.exe" (Join-Path $dist 'DSH启动器.exe') -Force
@@ -157,4 +161,7 @@ foreach ($n in 'Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForm
   $f = Join-Path $lib $n
   if (Test-Path $f) { Copy-Item $f (Join-Path $dist $n) -Force }
 }
+# 成品包也带一份许可证；dist\使用说明.txt 是直接维护的源文件，不在这里生成
+$lic = Join-Path $src 'LICENSE'
+if (Test-Path $lic) { Copy-Item $lic (Join-Path $dist 'LICENSE') -Force }
 Write-Output ('已同步 dist: ' + ((Get-ChildItem $dist -File | ForEach-Object { $_.Name }) -join ', '))
